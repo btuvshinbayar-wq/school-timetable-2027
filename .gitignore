@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Хөгжүүлэлтийн серверийн автомат хуулбарууд
+backups/backup_*.json

@@ -209,12 +209,12 @@ export const GeneratorDialog: React.FC<GeneratorDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Title bar - aSc Siren style */}
-        <div className="bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white px-4 py-2.5 flex items-center justify-between select-none shadow-sm">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none shadow-sm">
           <div className="flex items-center gap-2">
             <div className="p-1 bg-white/20 rounded-full animate-pulse">
               <Siren className="w-4 h-4 text-white" />
             </div>
-            <span className="font-bold text-sm">Хичээлийн хуваарь бодох (Generate Timetable)</span>
+            <span className="font-semibold text-sm">Хуваарь бодох</span>
           </div>
           <button
             onClick={onClose}
@@ -229,14 +229,14 @@ export const GeneratorDialog: React.FC<GeneratorDialogProps> = ({
         <div className="p-5 overflow-y-auto flex-1 space-y-4 text-xs">
           {/* Status Banner */}
           <div className="bg-white p-4 rounded-lg border border-slate-300 shadow-xs flex items-center gap-4">
-            <div className="w-14 h-14 rounded-full bg-red-100 border border-red-200 flex items-center justify-center shrink-0">
-              <Siren className={`w-8 h-8 text-red-600 ${isRunning ? 'animate-bounce' : ''}`} />
+            <div className="w-14 h-14 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center shrink-0">
+              <Siren className={`w-8 h-8 text-blue-700 ${isRunning ? 'animate-bounce' : ''}`} />
             </div>
             <div className="flex-1">
-              <h3 className="font-bold text-slate-800 text-sm">School Timetable Бодолтын Хөдөлгүүр</h3>
+              <h3 className="font-semibold text-slate-800 text-sm">Түгжсэн хичээлээс бусдыг шинээр байршуулна</h3>
               <p className="text-slate-600 mt-0.5 text-xs">
-                Бүх багш, анги танхим, хичээлийн төлөвлөгөө болон хамаарлын дүрмүүдийг шалгаж автоматаар
-                зөрчилгүй хуваарь зохионо.
+                Багш, анги, танхимын давхардал, чөлөөт цаг болон 'Хатуу' дүрмийг заавал хангаж, 'Өндөр', 'Энгийн'
+                дүрэм, цонхыг аль болох багасгана. Хэдийд ч зогсоож, тэр хүртэлх хамгийн сайн хуваарийг авч болно.
               </p>
               <div className="mt-2 text-indigo-700 font-semibold">{statusMessage}</div>
             </div>
@@ -269,7 +269,7 @@ export const GeneratorDialog: React.FC<GeneratorDialogProps> = ({
             </div>
             <div className="w-full bg-slate-200 rounded-full h-3.5 overflow-hidden p-0.5 border border-slate-300">
               <div
-                className="bg-gradient-to-r from-red-500 via-amber-500 to-emerald-500 h-full rounded-full transition-all duration-300"
+                className="bg-blue-700 h-full rounded-full transition-all duration-300"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -342,7 +342,7 @@ export const GeneratorDialog: React.FC<GeneratorDialogProps> = ({
               onClick={handleTestOnly}
               className="px-3 py-1.5 bg-white border border-slate-300 rounded text-xs font-semibold text-slate-700 hover:bg-slate-100 shadow-xs disabled:opacity-50"
             >
-              ✓ Хүчин чадал тестлэх (Test)
+              Ачаалал шалгах
             </button>
           </div>
 
@@ -363,10 +363,10 @@ export const GeneratorDialog: React.FC<GeneratorDialogProps> = ({
                 type="button"
                 disabled={isRunning}
                 onClick={handleStartGeneration}
-                className="flex items-center gap-1.5 px-5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded font-bold shadow-sm transition disabled:opacity-50 text-xs"
+                className="flex items-center gap-1.5 px-5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-bold shadow-sm transition disabled:opacity-50 text-xs"
               >
                 <Zap className="w-3.5 h-3.5" />
-                <span>{isRunning ? 'Бодож байна...' : 'Хуваарь бодох (Generate)'}</span>
+                <span>{isRunning ? 'Бодож байна...' : 'Хуваарь бодох'}</span>
               </button>
             ) : (
               <button
@@ -375,7 +375,7 @@ export const GeneratorDialog: React.FC<GeneratorDialogProps> = ({
                 className="flex items-center gap-1.5 px-6 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow-sm transition text-xs"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>Хуваарийг батлах & Байршуулах</span>
+                <span>Хуваарийг хэрэглэх</span>
               </button>
             )}
           </div>

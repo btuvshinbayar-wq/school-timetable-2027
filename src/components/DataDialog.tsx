@@ -25,6 +25,14 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { timeOffForShift } from '../utils/constraints';
+
+/** Чөлөөт цагийн жижиг тойм: тухайн өдөр, цагт аль нэг ээлжид хаалттай эсэх */
+function isOffAnyShift(map: Record<string, string> | undefined, day: number, period: number): boolean {
+  if (!map) return false;
+  if (map[`${day}_${period}`] === 'forbidden') return true;
+  for (const sh of [1, 2, 3]) if (map[`${sh}_${day}_${period}`] === 'forbidden') return true;
+  return false;
+}
 import { TimeOffMatrixDialog } from './TimeOffMatrixDialog';
 
 export type DataTab = 'subjects' | 'classes' | 'classrooms' | 'teachers';
@@ -419,7 +427,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-2 sm:p-4 overflow-hidden select-none">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-4xl overflow-hidden flex flex-col h-[86vh] max-h-[680px]">
         {/* Clean slate dialog title bar */}
-        <div className="bg-slate-800 text-white px-4 py-2 flex items-center justify-between select-none border-b border-slate-700">
+        <div className="dialog-titlebar px-4 py-2 flex items-center justify-between select-none border-b border-[#264b42]">
           <div className="flex items-center gap-2">
             {headerInfo.icon}
             <span className="font-semibold text-sm text-slate-100">{headerInfo.title}</span>
@@ -442,7 +450,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
               title="Хичээлүүд"
               className={`w-10 h-10 rounded flex items-center justify-center transition cursor-pointer ${
                 activeTab === 'subjects'
-                  ? 'bg-slate-800 text-white shadow-xs'
+                  ? 'bg-[#2f5d52] text-white shadow-xs'
                   : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
@@ -455,7 +463,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
               title="Анги бүлгүүд"
               className={`w-10 h-10 rounded flex items-center justify-center transition cursor-pointer ${
                 activeTab === 'classes'
-                  ? 'bg-slate-800 text-white shadow-xs'
+                  ? 'bg-[#2f5d52] text-white shadow-xs'
                   : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
@@ -468,7 +476,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
               title="Анги танхим"
               className={`w-10 h-10 rounded flex items-center justify-center transition cursor-pointer ${
                 activeTab === 'classrooms'
-                  ? 'bg-slate-800 text-white shadow-xs'
+                  ? 'bg-[#2f5d52] text-white shadow-xs'
                   : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
@@ -481,7 +489,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
               title="Багш нар"
               className={`w-10 h-10 rounded flex items-center justify-center transition cursor-pointer ${
                 activeTab === 'teachers'
-                  ? 'bg-slate-800 text-white shadow-xs'
+                  ? 'bg-[#2f5d52] text-white shadow-xs'
                   : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
@@ -521,13 +529,13 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                               setEditingSubject({ ...sub });
                             }}
                             className={`cursor-pointer transition-colors ${
-                              isSelected ? 'bg-slate-800 text-white font-medium' : 'hover:bg-slate-100 text-slate-800'
+                              isSelected ? 'bg-[#f3e4b9] text-slate-900 font-medium' : 'hover:bg-slate-100 text-slate-800'
                             }`}
                           >
                             <td className="py-1.5 px-3 border-r border-slate-200 text-left flex items-center gap-2">
                               <span
                                 className="w-3.5 h-3.5 rounded-xs border shrink-0"
-                                style={{ backgroundColor: sub.color, borderColor: isSelected ? '#ffffff' : '#94a3b8' }}
+                                style={{ backgroundColor: sub.color, borderColor: '#b9b2a4' }}
                               />
                               <span className="truncate">{sub.name}</span>
                             </td>
@@ -540,15 +548,15 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                                   setTimeOffSubject(sub);
                                 }}
                                 className={`inline-grid grid-cols-5 gap-[1px] p-[2px] rounded border hover:scale-105 transition cursor-pointer ${
-                                  isSelected ? 'bg-slate-700 border-slate-600' : 'bg-slate-200 border-slate-300'
+                                  isSelected ? 'bg-[#ecd596] border-[#d2a444]' : 'bg-slate-200 border-slate-300'
                                 }`}
                                 title="Цагийн менежмент тохируулах"
                               >
-                                {Array.from({ length: 15 }).map((_, i) => (
+                                {Array.from({ length: 30 }).map((_, i) => (
                                   <div
                                     key={i}
-                                    className={`w-1.5 h-1 rounded-[1px] ${
-                                      sub.timeOff && Object.values(sub.timeOff)[i] === 'forbidden'
+                                    className={`w-1.5 h-[3px] rounded-[1px] ${
+                                      isOffAnyShift(sub.timeOff, i % 5, Math.floor(i / 5))
                                         ? 'bg-rose-500'
                                         : 'bg-emerald-500'
                                     }`}
@@ -678,13 +686,13 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                               setEditingClass({ ...cls });
                             }}
                             className={`cursor-pointer transition-colors ${
-                              isSelected ? 'bg-slate-800 text-white font-medium' : 'hover:bg-slate-100 text-slate-800'
+                              isSelected ? 'bg-[#f3e4b9] text-slate-900 font-medium' : 'hover:bg-slate-100 text-slate-800'
                             }`}
                           >
                             <td className="py-1.5 px-3 border-r border-slate-200 text-left flex items-center gap-2">
                               <span
                                 className="w-3.5 h-3.5 rounded-xs border shrink-0"
-                                style={{ backgroundColor: cls.color, borderColor: isSelected ? '#ffffff' : '#94a3b8' }}
+                                style={{ backgroundColor: cls.color, borderColor: '#b9b2a4' }}
                               />
                               <span className="truncate font-semibold">{cls.name}</span>
                             </td>
@@ -711,15 +719,15 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                                   setTimeOffClass(cls);
                                 }}
                                 className={`inline-grid grid-cols-5 gap-[1px] p-[2px] rounded border hover:scale-105 transition cursor-pointer ${
-                                  isSelected ? 'bg-slate-700 border-slate-600' : 'bg-slate-200 border-slate-300'
+                                  isSelected ? 'bg-[#ecd596] border-[#d2a444]' : 'bg-slate-200 border-slate-300'
                                 }`}
                                 title="Цагийн менежмент тохируулах"
                               >
-                                {Array.from({ length: 15 }).map((_, i) => (
+                                {Array.from({ length: 30 }).map((_, i) => (
                                   <div
                                     key={i}
-                                    className={`w-1.5 h-1 rounded-[1px] ${
-                                      cls.timeOff && Object.values(cls.timeOff)[i] === 'forbidden'
+                                    className={`w-1.5 h-[3px] rounded-[1px] ${
+                                      isOffAnyShift(cls.timeOff, i % 5, Math.floor(i / 5))
                                         ? 'bg-rose-500'
                                         : 'bg-emerald-500'
                                     }`}
@@ -872,13 +880,13 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                               setEditingRoom({ ...r });
                             }}
                             className={`cursor-pointer transition-colors ${
-                              isSelected ? 'bg-slate-800 text-white font-medium' : 'hover:bg-slate-100 text-slate-800'
+                              isSelected ? 'bg-[#f3e4b9] text-slate-900 font-medium' : 'hover:bg-slate-100 text-slate-800'
                             }`}
                           >
                             <td className="py-1.5 px-3 border-r border-slate-200 text-left flex items-center gap-2">
                               <span
                                 className="w-3.5 h-3.5 rounded-xs border shrink-0"
-                                style={{ backgroundColor: r.color, borderColor: isSelected ? '#ffffff' : '#94a3b8' }}
+                                style={{ backgroundColor: r.color, borderColor: '#b9b2a4' }}
                               />
                               <span className="truncate font-semibold">{r.name}</span>
                             </td>
@@ -898,15 +906,15 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                                   setTimeOffRoom(r);
                                 }}
                                 className={`inline-grid grid-cols-5 gap-[1px] p-[2px] rounded border hover:scale-105 transition cursor-pointer ${
-                                  isSelected ? 'bg-slate-700 border-slate-600' : 'bg-slate-200 border-slate-300'
+                                  isSelected ? 'bg-[#ecd596] border-[#d2a444]' : 'bg-slate-200 border-slate-300'
                                 }`}
                                 title="Цагийн менежмент тохируулах"
                               >
-                                {Array.from({ length: 15 }).map((_, i) => (
+                                {Array.from({ length: 30 }).map((_, i) => (
                                   <div
                                     key={i}
-                                    className={`w-1.5 h-1 rounded-[1px] ${
-                                      r.timeOff && Object.values(r.timeOff)[i] === 'forbidden'
+                                    className={`w-1.5 h-[3px] rounded-[1px] ${
+                                      isOffAnyShift(r.timeOff, i % 5, Math.floor(i / 5))
                                         ? 'bg-rose-500'
                                         : 'bg-emerald-500'
                                     }`}
@@ -1035,13 +1043,13 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                               setEditingTeacher({ ...teach });
                             }}
                             className={`cursor-pointer transition-colors ${
-                              isSelected ? 'bg-slate-800 text-white font-medium' : 'hover:bg-slate-100 text-slate-800'
+                              isSelected ? 'bg-[#f3e4b9] text-slate-900 font-medium' : 'hover:bg-slate-100 text-slate-800'
                             }`}
                           >
                             <td className="py-1.5 px-3 border-r border-slate-200 text-left flex items-center gap-2">
                               <span
                                 className="w-3.5 h-3.5 rounded-xs border shrink-0"
-                                style={{ backgroundColor: teach.color, borderColor: isSelected ? '#ffffff' : '#94a3b8' }}
+                                style={{ backgroundColor: teach.color, borderColor: '#b9b2a4' }}
                               />
                               <span className="truncate font-semibold">{teach.name}</span>
                             </td>
@@ -1054,15 +1062,15 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                                   setTimeOffTeacher(teach);
                                 }}
                                 className={`inline-grid grid-cols-5 gap-[1px] p-[2px] rounded border hover:scale-105 transition cursor-pointer ${
-                                  isSelected ? 'bg-slate-700 border-slate-600' : 'bg-slate-200 border-slate-300'
+                                  isSelected ? 'bg-[#ecd596] border-[#d2a444]' : 'bg-slate-200 border-slate-300'
                                 }`}
                                 title="Цагийн менежмент тохируулах"
                               >
-                                {Array.from({ length: 15 }).map((_, i) => (
+                                {Array.from({ length: 30 }).map((_, i) => (
                                   <div
                                     key={i}
-                                    className={`w-1.5 h-1 rounded-[1px] ${
-                                      teach.timeOff && Object.values(teach.timeOff)[i] === 'forbidden'
+                                    className={`w-1.5 h-[3px] rounded-[1px] ${
+                                      isOffAnyShift(teach.timeOff, i % 5, Math.floor(i / 5))
                                         ? 'bg-rose-500'
                                         : 'bg-emerald-500'
                                     }`}
@@ -1210,7 +1218,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
         <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 select-none">
           <div className="bg-white rounded-lg shadow-2xl border border-slate-300 w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in">
             {/* Modal Header */}
-            <div className="bg-slate-800 text-white px-5 py-3 flex items-center justify-between border-b border-slate-700">
+            <div className="dialog-titlebar px-5 py-3 flex items-center justify-between border-b border-[#264b42]">
               <div className="flex items-center gap-2.5">
                 <HelpCircle className="w-5 h-5 text-slate-300" />
                 <span className="font-semibold text-sm text-slate-100">Өгөгдөл (Data) цэстэй ажиллах зааварчилгаа</span>
@@ -1229,7 +1237,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 onClick={() => setHelpTab('general')}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
                   helpTab === 'general'
-                    ? 'bg-slate-800 text-white shadow-xs'
+                    ? 'bg-[#2f5d52] text-white shadow-xs'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -1239,7 +1247,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 onClick={() => setHelpTab('subjects')}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
                   helpTab === 'subjects'
-                    ? 'bg-slate-800 text-white shadow-xs'
+                    ? 'bg-[#2f5d52] text-white shadow-xs'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -1250,7 +1258,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 onClick={() => setHelpTab('classes')}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
                   helpTab === 'classes'
-                    ? 'bg-slate-800 text-white shadow-xs'
+                    ? 'bg-[#2f5d52] text-white shadow-xs'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -1261,7 +1269,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 onClick={() => setHelpTab('classrooms')}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
                   helpTab === 'classrooms'
-                    ? 'bg-slate-800 text-white shadow-xs'
+                    ? 'bg-[#2f5d52] text-white shadow-xs'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -1272,7 +1280,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 onClick={() => setHelpTab('teachers')}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
                   helpTab === 'teachers'
-                    ? 'bg-slate-800 text-white shadow-xs'
+                    ? 'bg-[#2f5d52] text-white shadow-xs'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -1457,7 +1465,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
               </span>
               <button
                 onClick={() => setShowHelpModal(false)}
-                className="px-5 py-1.5 bg-slate-800 text-white rounded text-xs font-semibold hover:bg-slate-900 shadow-xs transition cursor-pointer"
+                className="px-5 py-1.5 bg-blue-700 text-white rounded text-xs font-semibold hover:bg-blue-800 shadow-xs transition cursor-pointer"
               >
                 Ойлголоо, Хаах
               </button>
@@ -1540,7 +1548,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded bg-slate-800 text-white font-bold hover:bg-slate-900 shadow-xs cursor-pointer"
+                  className="px-4 py-1.5 rounded bg-blue-700 text-white font-bold hover:bg-blue-800 shadow-xs cursor-pointer"
                 >
                   Хадгалах
                 </button>
@@ -1626,7 +1634,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded bg-slate-800 text-white font-bold hover:bg-slate-900 shadow-xs cursor-pointer"
+                  className="px-4 py-1.5 rounded bg-blue-700 text-white font-bold hover:bg-blue-800 shadow-xs cursor-pointer"
                 >
                   Хадгалах
                 </button>
@@ -1735,7 +1743,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded bg-slate-800 text-white font-bold hover:bg-slate-900 shadow-xs cursor-pointer"
+                  className="px-4 py-1.5 rounded bg-blue-700 text-white font-bold hover:bg-blue-800 shadow-xs cursor-pointer"
                 >
                   Хадгалах
                 </button>
@@ -1858,7 +1866,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded bg-slate-800 text-white font-bold hover:bg-slate-900 shadow-xs cursor-pointer"
+                  className="px-4 py-1.5 rounded bg-blue-700 text-white font-bold hover:bg-blue-800 shadow-xs cursor-pointer"
                 >
                   Хадгалах
                 </button>
@@ -1872,7 +1880,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
       {subgroupClass && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-lg shadow-xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in">
-            <div className="bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold flex justify-between">
+            <div className="dialog-titlebar px-4 py-2.5 text-sm font-semibold flex justify-between">
               <span>{subgroupClass.name} анги - Дэд бүлгүүд</span>
               <button onClick={() => setSubgroupClass(null)} className="text-slate-300 hover:text-white">
                 ✕
@@ -2028,7 +2036,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
       {copyClassModalOpen && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-lg shadow-xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in text-left">
-            <div className="bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold flex justify-between items-center border-b border-slate-700">
+            <div className="dialog-titlebar px-4 py-2.5 text-sm font-semibold flex justify-between items-center border-b border-slate-700">
               <span>Ангийн хичээл & тохиргоог өөр ангид хуулах</span>
               <button onClick={() => setCopyClassModalOpen(false)} className="text-slate-400 hover:text-white cursor-pointer">
                 ✕
@@ -2132,7 +2140,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
       {copyTeacherModalOpen && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-lg shadow-xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in text-left">
-            <div className="bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold flex justify-between items-center border-b border-slate-700">
+            <div className="dialog-titlebar px-4 py-2.5 text-sm font-semibold flex justify-between items-center border-b border-slate-700">
               <span>Багшийн цагийн менежментийг хуулах</span>
               <button onClick={() => setCopyTeacherModalOpen(false)} className="text-slate-400 hover:text-white cursor-pointer">
                 ✕

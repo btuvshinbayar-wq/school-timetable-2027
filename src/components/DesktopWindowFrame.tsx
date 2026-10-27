@@ -10,7 +10,7 @@ export const DesktopWindowFrame: React.FC<DesktopWindowFrameProps> = ({
   children,
 }) => {
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#dbe2ec] font-sans">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#ecebe5] font-sans">
       {children}
     </div>
   );

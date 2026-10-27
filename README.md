@@ -1,20 +1,32 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# School Timetable 2027
 
-# Run and deploy your AI Studio app
+Монголын ерөнхий боловсролын сургуульд зориулсан хичээлийн хуваарь зохиох программ:
+2–3 ээлж, олон байр, дэд бүлэг, хос цаг, А/Б 7 хоног, хамтатгасан анги, хамтран заах багш.
 
-This contains everything you need to run your app locally.
+## Ажиллуулах
 
-View your app in AI Studio: https://ai.studio/apps/515a624a-418d-4449-ab1a-79115a82de0c
+```bash
+npm install
+npm run dev        # http://localhost:3000
+```
 
-## Run Locally
+Хөгжүүлэлтийн сервер (`npm run dev` / `npm run preview`) дээр автомат хуулбар `backups/` хавтаст хадгалагдана.
+Статик байршуулалт эсвэл PWA үед хуулбар хөтчийн дотор (IndexedDB, сүүлийн 30) хадгалагдана.
 
-**Prerequisites:**  Node.js
+## Хуваарь бодогч
 
+`src/utils/solver.ts` — хүндийг нь эхэлж байршуулж, гацвал саад болж буй хичээлийг гаргаж засаад,
+дараа нь зөөх/солих замаар цонх, тархалт зэрэг зөөлөн торгуулийг бууруулна. Web Worker дотор ажиллана.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- Хатуу хязгаарлалт (`src/utils/constraints.ts`): багш, анги, танхимын давхардал (бодит хонхны цагаар),
+  дэд бүлгийн хуваалт, А/Б, хуваалцах танхимын багтаамж, ээлж бүрийн чөлөөт цаг.
+- Дүрмийн жин: Хатуу 1000, Өндөр 50, Энгийн 10.
+- Гараар засах (`src/utils/manualEdit.ts`): чирэхэд боломжтой нүд ногоон, солих боломжтой шар, боломжгүй улаан.
+  Буцаах/дахих: Ctrl+Z / Ctrl+Y.
+
+## Тест
+
+```bash
+npm test           # хатуу хязгаарлалт, гараар засах, Excel нэгтгэл (≈30 сек)
+npm run stress     # 120 бүлэг, 3 ээлж, 3 байртай стресс тест (STRESS_SECONDS=60)
+```
