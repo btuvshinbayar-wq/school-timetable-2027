@@ -21,6 +21,31 @@ import {
   getDefaultSchoolSettings,
 } from './defaultData';
 import { ManagerProfile } from '../types/timetable';
+import { hasLegacyTimeOff, migrateTimeOff } from './constraints';
+
+/**
+ * Хуучин хувилбарын өгөгдлийг шинэ бүтэц рүү шилжүүлнэ:
+ *  - Чөлөөт цагийн `${өдөр}_${цаг}` түлхүүрийг `${ээлж}_${өдөр}_${цаг}` болгоно
+ *    (анги → өөрийн ээлж; багш, хичээл, танхим → бүх ээлж, өмнөх үйлдэлтэй адил).
+ */
+export function normalizeProject(state: ProjectState): ProjectState {
+  const shiftNums =
+    state.settings?.shifts && state.settings.shifts.length > 0
+      ? state.settings.shifts.map((s) => s.shiftNumber)
+      : [1, 2];
+  const fixAll = <T extends { timeOff: any }>(list: T[] | undefined): T[] =>
+    (list || []).map((x) => (hasLegacyTimeOff(x.timeOff) ? { ...x, timeOff: migrateTimeOff(x.timeOff, shiftNums) } : x));
+
+  return {
+    ...state,
+    teachers: fixAll(state.teachers),
+    subjects: fixAll(state.subjects),
+    classrooms: fixAll(state.classrooms),
+    classes: (state.classes || []).map((c) =>
+      hasLegacyTimeOff(c.timeOff) ? { ...c, timeOff: migrateTimeOff(c.timeOff, [c.shift || 1]) } : c
+    ),
+  };
+}
 
 export interface ProjectState {
   version: string;
@@ -76,7 +101,7 @@ export function loadSavedProject(): ProjectState {
               !r.name?.includes('Математик өдөрт 1')
           );
         }
-        return parsed;
+        return normalizeProject(parsed);
       }
     }
   } catch (err) {
@@ -207,7 +232,7 @@ export async function loadServerBackup(filename: string): Promise<ProjectState> 
   if (!data.success || !data.data) {
     throw new Error(data.error || 'Хуулбарын өгөгдөл буруу байна');
   }
-  return data.data as ProjectState;
+  return normalizeProject(data.data as ProjectState);
 }
 
 export async function importProjectFromFile(file: File): Promise<ProjectState> {
@@ -221,7 +246,7 @@ export async function importProjectFromFile(file: File): Promise<ProjectState> {
           throw new Error('Файлын бүтэц буруу байна. School Timetable төслийн файл биш байна.');
         }
         if (!parsed.buildings) parsed.buildings = DEFAULT_BUILDINGS;
-        resolve(parsed as ProjectState);
+        resolve(normalizeProject(parsed as ProjectState));
       } catch (err: any) {
         reject(new Error(`Төслийн файл уншихад алдаа: ${err?.message || err}`));
       }

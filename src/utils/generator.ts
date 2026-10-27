@@ -3,7 +3,6 @@ import {
   Teacher,
   ClassGroup,
   Classroom,
-  Building,
   LessonContract,
   ScheduledCard,
   SchoolSettings,
@@ -12,20 +11,86 @@ import {
   GenerationStats,
   WeekCycle,
 } from '../types/timetable';
+import {
+  ConstraintContext,
+  Occupancy,
+  buildTimeModel,
+  classDaySlots,
+  classesOf,
+  countGaps,
+  cardUsesClass,
+  cardUsesTeacher,
+  getTimeOffStatus,
+  maxRun,
+  pairClashes,
+  roomCapacity,
+  subgroupCategory,
+  teacherDaySlots,
+  teachersOf,
+  timeOffHits,
+  timesOverlap,
+  weeksOverlap,
+  TimeModel,
+} from './constraints';
 
 export interface CardToPlace {
   id: string;
   contractId: string;
   subjectId: string;
   teacherId: string;
+  coTeacherIds?: string[];
   classId: string;
+  jointClassIds?: string[];
   subgroupId?: string;
   subgroupName?: string;
   classroomId?: string;
   shift: number;
   weekCycle: WeekCycle;
   isDouble: boolean;
+  /** Хос цагийн аль хагас вэ */
+  doubleHalf?: 'first' | 'second';
   partnerCardId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Ачааллын тооцоо (feasibility)
+// ---------------------------------------------------------------------------
+
+/** А/Б-г тооцсон 7 хоногийн ачаалал: all + max(week_a, week_b) */
+function weeklyLoad(list: LessonContract[]): number {
+  let all = 0;
+  let a = 0;
+  let b = 0;
+  for (const ct of list) {
+    const w = ct.weekCycle || 'all';
+    if (w === 'week_a') a += ct.totalPeriods;
+    else if (w === 'week_b') b += ct.totalPeriods;
+    else all += ct.totalPeriods;
+  }
+  return all + Math.max(a, b);
+}
+
+/** Ангийн бодит нүдний хэрэгцээ: бүхэл ангийн цаг + хуваалт бүрийн хамгийн их бүлгийн цаг */
+export function classSlotDemand(cls: ClassGroup, classes: ClassGroup[], contracts: LessonContract[]): number {
+  const mine = contracts.filter((ct) => classesOf(ct).includes(cls.id));
+  const whole = mine.filter((ct) => !ct.subgroupName);
+  let demand = weeklyLoad(whole);
+
+  const byCategory = new Map<string, Map<string, LessonContract[]>>();
+  for (const ct of mine) {
+    if (!ct.subgroupName) continue;
+    const cat = subgroupCategory(classes, cls.id, ct.subgroupName);
+    if (!byCategory.has(cat)) byCategory.set(cat, new Map());
+    const names = byCategory.get(cat)!;
+    if (!names.has(ct.subgroupName)) names.set(ct.subgroupName, []);
+    names.get(ct.subgroupName)!.push(ct);
+  }
+  for (const names of byCategory.values()) {
+    let mx = 0;
+    for (const list of names.values()) mx = Math.max(mx, weeklyLoad(list));
+    demand += mx;
+  }
+  return demand;
 }
 
 /**
@@ -40,32 +105,44 @@ export function testTimetableFeasibility(
   settings: SchoolSettings
 ): { passed: boolean; messages: string[] } {
   const messages: string[] = [];
+  const tm = buildTimeModel(settings);
+  const days = settings.daysPerWeek;
 
-  // Check each class
+  // Анги бүр
   for (const c of classes) {
-    const classLessons = contracts.filter((ct) => ct.classId === c.id);
-    const totalPeriods = classLessons.reduce((sum, ct) => sum + ct.totalPeriods, 0);
+    const demand = classSlotDemand(c, classes, contracts);
+    const periods = tm.periodsCount(c.shift);
+    let capacity = 0;
+    for (let d = 0; d < days; d++)
+      for (let p = 0; p < periods; p++)
+        if (getTimeOffStatus(c.timeOff, c.shift, d, p) !== 'forbidden') capacity++;
 
-    const shiftConf = settings.shifts.find((s) => s.shiftNumber === c.shift) || settings.shifts[0];
-    const maxWeekly = settings.daysPerWeek * (shiftConf?.periodsCount || 6);
-
-    if (totalPeriods > maxWeekly) {
+    if (demand > capacity) {
       messages.push(
-        `❌ [Анги: ${c.name}] 7 хоногт нийт ${totalPeriods} цаг хичээлтэй байгаа нь тухайн ${c.shift}-р ээлжийн дээд хязгаар ${maxWeekly} цагаас давж байна.`
+        `❌ [Анги: ${c.name}] 7 хоногт ${demand} нүд шаардлагатай (дэд бүлэг, А/Б-г тооцсон) боловч ${c.shift}-р ээлжид чөлөөт цагийг хассан ${capacity} нүд л байна.`
       );
     }
   }
 
-  // Check teachers
+  // Багш бүр (хамтран заах цагийг оролцуулна)
   for (const t of teachers) {
-    const teacherLessons = contracts.filter((ct) => ct.teacherId === t.id);
-    const totalPeriods = teacherLessons.reduce((sum, ct) => sum + ct.totalPeriods, 0);
+    const mine = contracts.filter((ct) => teachersOf(ct).includes(t.id));
+    if (mine.length === 0) continue;
+    const demand = weeklyLoad(mine);
+    const shifts = new Set<number>();
+    for (const ct of mine) {
+      const cls = classes.find((c) => c.id === ct.classId);
+      shifts.add(cls?.shift || 1);
+    }
+    let capacity = 0;
+    for (const sh of shifts)
+      for (let d = 0; d < days; d++)
+        for (let p = 0; p < tm.periodsCount(sh); p++)
+          if (getTimeOffStatus(t.timeOff, sh, d, p) !== 'forbidden') capacity++;
 
-    // Approximate weekly capacity (all shifts teacher teaches)
-    const totalAvailableSlots = settings.daysPerWeek * 6 * (settings.shiftsCount || 2);
-    if (totalPeriods > totalAvailableSlots) {
+    if (demand > capacity) {
       messages.push(
-        `❌ [Багш: ${t.name}] Заах нийт ${totalPeriods} цаг байгаа нь сургуулийн боломжит цагаас давсан байна.`
+        `❌ [Багш: ${t.name}] 7 хоногт ${demand} цаг заах ёстой боловч заадаг ээлжүүддээ чөлөөт цагийг хассан ${capacity} цаг л боломжтой.`
       );
     }
   }
@@ -86,11 +163,15 @@ export function expandContractsToCards(
   classes: ClassGroup[],
   existingScheduled: ScheduledCard[] = []
 ): { cardsToPlace: CardToPlace[]; lockedCards: ScheduledCard[] } {
-  const lockedCards = existingScheduled.filter((c) => c.isLocked);
-  const lockedUsage: Record<string, number> = {};
+  const contractIds = new Set(contracts.map((c) => c.id));
+  // Гэрээ нь устсан түгжсэн картыг авч үлдэхгүй
+  const lockedCards = existingScheduled.filter((c) => c.isLocked && contractIds.has(c.contractId));
+  const lockedCount: Record<string, number> = {};
+  const lockedPairs: Record<string, number> = {};
 
   for (const c of lockedCards) {
-    lockedUsage[c.contractId] = (lockedUsage[c.contractId] || 0) + 1;
+    lockedCount[c.contractId] = (lockedCount[c.contractId] || 0) + 1;
+    if (c.isDoublePart === 'first') lockedPairs[c.contractId] = (lockedPairs[c.contractId] || 0) + 1;
   }
 
   const cardsToPlace: CardToPlace[] = [];
@@ -98,60 +179,35 @@ export function expandContractsToCards(
   for (const ct of contracts) {
     const cls = classes.find((c) => c.id === ct.classId);
     const shift = cls?.shift || 1;
-    const alreadyLocked = lockedUsage[ct.id] || 0;
-    let remaining = Math.max(0, ct.totalPeriods - alreadyLocked);
+    let remaining = Math.max(0, ct.totalPeriods - (lockedCount[ct.id] || 0));
+    let doublePairs = Math.max(0, (ct.doubleLessons || 0) - (lockedPairs[ct.id] || 0));
 
-    let doublePairs = ct.doubleLessons;
+    const base = {
+      contractId: ct.id,
+      subjectId: ct.subjectId,
+      teacherId: ct.teacherId,
+      coTeacherIds: ct.coTeacherIds && ct.coTeacherIds.length > 0 ? [...ct.coTeacherIds] : undefined,
+      classId: ct.classId,
+      jointClassIds: ct.jointClassIds && ct.jointClassIds.length > 0 ? [...ct.jointClassIds] : undefined,
+      subgroupId: ct.subgroupId,
+      subgroupName: ct.subgroupName,
+      classroomId: ct.classroomId,
+      shift,
+      weekCycle: (ct.weekCycle || 'all') as WeekCycle,
+    };
+
     while (doublePairs > 0 && remaining >= 2) {
       const card1Id = `${ct.id}_dbl1_${doublePairs}`;
       const card2Id = `${ct.id}_dbl2_${doublePairs}`;
-      cardsToPlace.push({
-        id: card1Id,
-        contractId: ct.id,
-        subjectId: ct.subjectId,
-        teacherId: ct.teacherId,
-        classId: ct.classId,
-        subgroupId: ct.subgroupId,
-        subgroupName: ct.subgroupName,
-        classroomId: ct.classroomId,
-        shift,
-        weekCycle: ct.weekCycle || 'all',
-        isDouble: true,
-        partnerCardId: card2Id,
-      });
-      cardsToPlace.push({
-        id: card2Id,
-        contractId: ct.id,
-        subjectId: ct.subjectId,
-        teacherId: ct.teacherId,
-        classId: ct.classId,
-        subgroupId: ct.subgroupId,
-        subgroupName: ct.subgroupName,
-        classroomId: ct.classroomId,
-        shift,
-        weekCycle: ct.weekCycle || 'all',
-        isDouble: true,
-        partnerCardId: card1Id,
-      });
+      cardsToPlace.push({ ...base, id: card1Id, isDouble: true, doubleHalf: 'first', partnerCardId: card2Id });
+      cardsToPlace.push({ ...base, id: card2Id, isDouble: true, doubleHalf: 'second', partnerCardId: card1Id });
       doublePairs--;
       remaining -= 2;
     }
 
     let singleIdx = 1;
     while (remaining > 0) {
-      cardsToPlace.push({
-        id: `${ct.id}_sgl_${singleIdx++}`,
-        contractId: ct.id,
-        subjectId: ct.subjectId,
-        teacherId: ct.teacherId,
-        classId: ct.classId,
-        subgroupId: ct.subgroupId,
-        subgroupName: ct.subgroupName,
-        classroomId: ct.classroomId,
-        shift,
-        weekCycle: ct.weekCycle || 'all',
-        isDouble: false,
-      });
+      cardsToPlace.push({ ...base, id: `${ct.id}_sgl_${singleIdx++}`, isDouble: false });
       remaining--;
     }
   }
@@ -159,364 +215,215 @@ export function expandContractsToCards(
   return { cardsToPlace, lockedCards };
 }
 
-/**
- * Slot reservation state tracking for classes, supporting subgroups
- */
-export interface ClassSlotState {
-  hasWholeClass: boolean;
-  subgroups: Set<string>;
+/** Байрлуулах гэж буй картыг ScheduledCard болгоно */
+function toScheduled(card: CardToPlace, day: number, period: number): ScheduledCard {
+  const sc: ScheduledCard = {
+    id: card.id,
+    contractId: card.contractId,
+    subjectId: card.subjectId,
+    teacherId: card.teacherId,
+    classId: card.classId,
+    subgroupName: card.subgroupName,
+    classroomId: card.classroomId,
+    shift: card.shift,
+    weekCycle: card.weekCycle,
+    dayIndex: day,
+    periodIndex: period,
+  };
+  if (card.coTeacherIds) sc.coTeacherIds = card.coTeacherIds;
+  if (card.jointClassIds) sc.jointClassIds = card.jointClassIds;
+  if (card.doubleHalf && card.partnerCardId) {
+    sc.isDoublePart = card.doubleHalf;
+    sc.linkedCardId = card.partnerCardId;
+  }
+  return sc;
 }
 
-/**
- * Checks placement validity with Subgroup and Relations constraints
- */
-function isValidPlacement(
+// ---------------------------------------------------------------------------
+// Хамаарлын (relationship) хатуу дүрмүүд — зөвхөн 'strict' ач холбогдолтойг энд шүүнэ.
+// 'high' / 'normal' дүрмүүд verify-д анхааруулга болно (жинтэй тооцоо 2-р шатанд).
+// ---------------------------------------------------------------------------
+
+function rulesAllow(
   card: CardToPlace,
   day: number,
   period: number,
-  classes: ClassGroup[],
-  teachers: Teacher[],
-  subjects: Subject[],
-  classrooms: Classroom[],
-  settings: SchoolSettings,
-  teacherSchedule: Map<string, Set<string>>,
-  roomSchedule: Map<string, Set<string>>,
-  classSchedule: Map<string, ClassSlotState>,
-  relationships: CardRelationship[] = [],
-  currentScheduledCards: ScheduledCard[] = []
+  tm: TimeModel,
+  relationships: CardRelationship[],
+  placed: ScheduledCard[]
 ): boolean {
-  const classSlotKey = `${card.classId}_${day}_${period}`;
-  const teacherSlotKey = `${card.shift}_${day}_${period}`;
-  const roomSlotKey = `${card.shift}_${day}_${period}`;
+  const periodsCount = tm.periodsCount(card.shift);
+  const strict = relationships.filter((r) => r.isActive && r.importance === 'strict');
+  if (strict.length === 0) return true;
 
-  // 1. Class conflict with Subgroup handling
-  const clsSlot = classSchedule.get(classSlotKey);
-  if (clsSlot) {
-    if (!card.subgroupName) {
-      // Whole class lesson requires completely empty slot
-      return false;
-    } else {
-      // Card has subgroup
-      if (clsSlot.hasWholeClass) return false;
-      // Cannot share slot with the SAME subgroup
-      if (clsSlot.subgroups.has(card.subgroupName)) return false;
-    }
-  }
+  // Хос цагийн 1-р хагасыг шалгахдаа 2-р хагасын цагийг урьдчилан тооцно
+  const extendsNext = card.doubleHalf === 'first';
+  const inClassScope = (r: CardRelationship) =>
+    !r.classIds || r.classIds.length === 0 || classesOf(card).some((c) => r.classIds.includes(c));
+  const inTeacherScope = (r: CardRelationship, tId: string) =>
+    !r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(tId);
 
-  // 2. Teacher conflict
-  if (teacherSchedule.get(card.teacherId)?.has(teacherSlotKey)) {
-    return false;
-  }
-
-  // 3. Room conflict
-  if (card.classroomId) {
-    const room = classrooms.find((r) => r.id === card.classroomId);
-    if (room && !room.isShared) {
-      if (roomSchedule.get(card.classroomId)?.has(roomSlotKey)) {
-        return false;
-      }
-    }
-  }
-
-  // 4. Time off checks
-  const teacher = teachers.find((t) => t.id === card.teacherId);
-  if (teacher?.timeOff[`${day}_${period}`] === 'forbidden') return false;
-
-  const classObj = classes.find((c) => c.id === card.classId);
-  if (classObj?.timeOff[`${day}_${period}`] === 'forbidden') return false;
-
-  const subjectObj = subjects.find((s) => s.id === card.subjectId);
-  if (subjectObj?.timeOff[`${day}_${period}`] === 'forbidden') return false;
-
-  const shiftConf =
-    settings.shifts.find((s) => s.shiftNumber === card.shift) || settings.shifts[0];
-  const periodsCount = shiftConf?.periodsCount || 6;
-
-  // 5. Relationship Constraint 1: 2 хичээл нэг өдөрт орохгүй (cannot_same_day)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'cannot_same_day') continue;
-    if (r.classIds && r.classIds.length > 0 && !r.classIds.includes(card.classId)) continue;
-
-    if (r.subjectIds.includes(card.subjectId)) {
-      // Check if another subject in r.subjectIds is already on this day for this class
-      const otherSubjects = r.subjectIds.filter((sId) => sId !== card.subjectId);
-      const hasOther = currentScheduledCards.some(
-        (c) =>
-          c.classId === card.classId &&
-          c.dayIndex === day &&
-          otherSubjects.includes(c.subjectId)
-      );
-      if (hasOther) {
-        if (r.importance === 'strict') return false;
-      }
-    }
-  }
-
-  // 6. Relationship Constraint 2: 2 хичээл дараалласан цагт орохгүй (cannot_consecutive)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'cannot_consecutive') continue;
-    if (r.classIds && r.classIds.length > 0 && !r.classIds.includes(card.classId)) continue;
-
-    if (r.subjectIds.includes(card.subjectId)) {
-      const otherSubjects = r.subjectIds.filter((sId) => sId !== card.subjectId);
-      const hasConsecutive = currentScheduledCards.some(
-        (c) =>
-          c.classId === card.classId &&
-          c.dayIndex === day &&
-          Math.abs(c.periodIndex - period) === 1 &&
-          otherSubjects.includes(c.subjectId)
-      );
-      if (hasConsecutive) {
-        if (r.importance === 'strict') return false;
-      }
-    }
-  }
-
-  // 7. Relationship Constraint 3: Сонгосон хичээл эхний юм уу сүүлийн цагт орох (first_or_last)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'first_or_last') continue;
-    if (r.classIds && r.classIds.length > 0 && !r.classIds.includes(card.classId)) continue;
-
-    if (r.subjectIds.includes(card.subjectId)) {
-      const mode = r.firstOrLastMode || 'first_or_last';
-      const isFirst = period === 0;
-      const isLast = period === periodsCount - 1 || (card.isDouble && period === periodsCount - 2);
-      const isOk = mode === 'first_only' ? isFirst : mode === 'last_only' ? isLast : (isFirst || isLast);
-      if (!isOk) {
-        if (r.importance === 'strict') return false;
-      }
-    }
-  }
-
-  // 8. Relationship Constraint 4: Сонгосон хичээл зөвхөн боломжтой цаг дээр хуваарилах (allowed_periods_only)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'allowed_periods_only') continue;
-    if (r.classIds && r.classIds.length > 0 && !r.classIds.includes(card.classId)) continue;
-
-    if (r.subjectIds.includes(card.subjectId) && r.allowedPeriods && r.allowedPeriods.length > 0) {
-      if (!r.allowedPeriods.includes(period)) {
-        if (r.importance === 'strict') return false;
-      }
-    }
-  }
-
-  // 9. Relationship Constraint 5: Өдөрт заах цагийн хамгийн их/бага хязгаар (daily_hours_limit)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'daily_hours_limit') continue;
-    const maxPerDay = r.maxPeriodsPerDay || 6;
-
-    if (r.targetEntity === 'classes') {
-      if (!r.classIds || r.classIds.length === 0 || r.classIds.includes(card.classId)) {
-        const classDayCards = currentScheduledCards.filter(
-          (c) => c.classId === card.classId && c.dayIndex === day
-        );
-        if (classDayCards.length >= maxPerDay) {
-          if (r.importance === 'strict') return false;
-        }
-      }
-    } else {
-      // default: teachers
-      if (!r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(card.teacherId)) {
-        const teacherDayCards = currentScheduledCards.filter(
-          (c) => c.teacherId === card.teacherId && c.dayIndex === day
-        );
-        if (teacherDayCards.length >= maxPerDay) {
-          if (r.importance === 'strict') return false;
-        }
-      }
-    }
-  }
-
-  // 10. Relationship Constraint 6: Дараалласан цагийн хамгийн их хязгаар (max_consecutive_periods)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'max_consecutive_periods') continue;
-    const maxConsec = r.maxConsecutive || 3;
-
-    if (r.targetEntity === 'classes') {
-      if (!r.classIds || r.classIds.length === 0 || r.classIds.includes(card.classId)) {
-        const occupiedPeriods = new Set(
-          currentScheduledCards
-            .filter((c) => c.classId === card.classId && c.dayIndex === day)
-            .map((c) => c.periodIndex)
-        );
-        occupiedPeriods.add(period);
-        if (card.isDouble) occupiedPeriods.add(period + 1);
-
-        // Check if there is a consecutive sequence longer than maxConsec
-        let consecutive = 0;
-        for (let p = 0; p < periodsCount; p++) {
-          if (occupiedPeriods.has(p)) {
-            consecutive++;
-            if (consecutive > maxConsec) {
-              if (r.importance === 'strict') return false;
-            }
-          } else {
-            consecutive = 0;
-          }
-        }
-      }
-    } else {
-      // default: teachers
-      if (!r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(card.teacherId)) {
-        const occupiedPeriods = new Set(
-          currentScheduledCards
-            .filter((c) => c.teacherId === card.teacherId && c.dayIndex === day)
-            .map((c) => c.periodIndex)
-        );
-        occupiedPeriods.add(period);
-        if (card.isDouble) occupiedPeriods.add(period + 1);
-
-        let consecutive = 0;
-        for (let p = 0; p < periodsCount; p++) {
-          if (occupiedPeriods.has(p)) {
-            consecutive++;
-            if (consecutive > maxConsec) {
-              if (r.importance === 'strict') return false;
-            }
-          } else {
-            consecutive = 0;
-          }
-        }
-      }
-    }
-  }
-
-  // 11. Relationship Constraint 7: 1 багш 1 анги бүлэгт өдөрт 1-с илүүгүй удаа орох (teacher_max_once_per_day)
-  const activeDailyRule = relationships.find(
-    (r) =>
-      r.isActive &&
-      r.condition === 'teacher_max_once_per_day' &&
-      (!r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(card.teacherId)) &&
-      (!r.classIds || r.classIds.length === 0 || r.classIds.includes(card.classId))
-  );
-
-  if (activeDailyRule) {
-    const teacherClassCardsOnDay = currentScheduledCards.filter(
-      (c) => c.teacherId === card.teacherId && c.classId === card.classId && c.dayIndex === day
-    );
-
-    if (teacherClassCardsOnDay.length > 0) {
-      const isConsecutive = teacherClassCardsOnDay.some(
-        (c) => Math.abs(c.periodIndex - period) === 1
-      );
-
-      if (activeDailyRule.allowDoubleConsecutive !== false && isConsecutive) {
-        // permitted as continuation of double lesson
-      } else {
-        if (activeDailyRule.importance === 'strict') {
+  for (const r of strict) {
+    switch (r.condition) {
+      case 'cannot_same_day': {
+        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
+        const others = r.subjectIds.filter((s) => s !== card.subjectId);
+        if (placed.some((c) => c.classId === card.classId && c.dayIndex === day && others.includes(c.subjectId)))
           return false;
-        }
+        break;
       }
-    }
-  }
-
-  // 12. Relationship Constraint 10: Өдрийн болон 7 хоногийн цонхтой цагийн дээд хязгаар (max_gaps_daily_weekly)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'max_gaps_daily_weekly') continue;
-    const maxDayGaps = r.maxGapsPerDay ?? 1;
-
-    if (r.targetEntity === 'classes') {
-      if (!r.classIds || r.classIds.length === 0 || r.classIds.includes(card.classId)) {
-        const classPeriods = currentScheduledCards
-          .filter((c) => c.classId === card.classId && c.dayIndex === day)
-          .map((c) => c.periodIndex);
-        classPeriods.push(period);
-        if (card.isDouble) classPeriods.push(period + 1);
-
-        if (classPeriods.length >= 2) {
-          const minP = Math.min(...classPeriods);
-          const maxP = Math.max(...classPeriods);
-          const distinctP = new Set(classPeriods);
-          const dailyGaps = maxP - minP + 1 - distinctP.size;
-          if (dailyGaps > maxDayGaps && r.importance === 'strict') {
-            return false;
+      case 'cannot_consecutive': {
+        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
+        const others = r.subjectIds.filter((s) => s !== card.subjectId);
+        const lo = period - 1;
+        const hi = extendsNext ? period + 2 : period + 1;
+        if (
+          placed.some(
+            (c) =>
+              c.classId === card.classId &&
+              c.dayIndex === day &&
+              (c.periodIndex === lo || c.periodIndex === hi) &&
+              others.includes(c.subjectId)
+          )
+        )
+          return false;
+        break;
+      }
+      case 'first_or_last': {
+        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
+        if (card.doubleHalf === 'second') break; // 1-р хагасаар шийдэгдэнэ
+        const mode = r.firstOrLastMode || 'first_or_last';
+        const isFirst = period === 0;
+        const isLast = period === periodsCount - 1 || (extendsNext && period === periodsCount - 2);
+        const ok = mode === 'first_only' ? isFirst : mode === 'last_only' ? isLast : isFirst || isLast;
+        if (!ok) return false;
+        break;
+      }
+      case 'allowed_periods_only': {
+        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
+        if (r.allowedPeriods && r.allowedPeriods.length > 0 && !r.allowedPeriods.includes(period)) return false;
+        break;
+      }
+      case 'daily_hours_limit': {
+        const maxPerDay = r.maxPeriodsPerDay || 6;
+        if (r.targetEntity === 'classes') {
+          if (!inClassScope(r)) break;
+          for (const cId of classesOf(card)) {
+            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
+            if (classDaySlots(placed, cId, day, [period]).length > maxPerDay) return false;
+          }
+        } else {
+          for (const tId of teachersOf(card)) {
+            if (!inTeacherScope(r, tId)) continue;
+            const slots = teacherDaySlots(tm, placed, tId, day, [{ shift: card.shift, periodIndex: period }]);
+            if (slots.length > maxPerDay) return false;
           }
         }
+        break;
       }
-    } else {
-      // Teachers
-      if (!r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(card.teacherId)) {
-        const teacherPeriods = currentScheduledCards
-          .filter((c) => c.teacherId === card.teacherId && c.dayIndex === day)
-          .map((c) => c.periodIndex);
-        teacherPeriods.push(period);
-        if (card.isDouble) teacherPeriods.push(period + 1);
-
-        if (teacherPeriods.length >= 2) {
-          const minP = Math.min(...teacherPeriods);
-          const maxP = Math.max(...teacherPeriods);
-          const distinctP = new Set(teacherPeriods);
-          const dailyGaps = maxP - minP + 1 - distinctP.size;
-          if (dailyGaps > maxDayGaps && r.importance === 'strict') {
-            return false;
+      case 'max_consecutive_periods': {
+        const maxConsec = r.maxConsecutive || 3;
+        if (r.targetEntity === 'classes') {
+          for (const cId of classesOf(card)) {
+            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
+            const extra = extendsNext ? [period, period + 1] : [period];
+            if (maxRun(classDaySlots(placed, cId, day, extra)) > maxConsec) return false;
+          }
+        } else {
+          for (const tId of teachersOf(card)) {
+            if (!inTeacherScope(r, tId)) continue;
+            const extra = [{ shift: card.shift, periodIndex: period }];
+            if (extendsNext) extra.push({ shift: card.shift, periodIndex: period + 1 });
+            if (maxRun(teacherDaySlots(tm, placed, tId, day, extra)) > maxConsec) return false;
           }
         }
+        break;
       }
-    }
-  }
-
-  // 13. Relationship Constraint 11: 7 хоногт хичээл заах өдрийн дээд /доод хязгаар (teaching_days_limit)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'teaching_days_limit') continue;
-    const maxDays = r.maxDaysPerWeek ?? 5;
-
-    if (r.targetEntity === 'classes') {
-      if (!r.classIds || r.classIds.length === 0 || r.classIds.includes(card.classId)) {
-        const distinctDays = new Set(
-          currentScheduledCards.filter((c) => c.classId === card.classId).map((c) => c.dayIndex)
+      case 'teacher_max_once_per_day': {
+        if (!inTeacherScope(r, card.teacherId) || !inClassScope(r)) break;
+        const sameDay = placed.filter(
+          (c) =>
+            c.teacherId === card.teacherId &&
+            c.classId === card.classId &&
+            c.dayIndex === day &&
+            weeksOverlap(c.weekCycle, card.weekCycle)
         );
-        if (!distinctDays.has(day) && distinctDays.size >= maxDays) {
-          if (r.importance === 'strict') return false;
-        }
+        if (sameDay.length === 0) break;
+        // Зөвхөн өөрийн хос цагийн хамтрагчтайгаа залгаа байх нь зөвшөөрөгдөнө
+        const onlyPartner =
+          r.allowDoubleConsecutive !== false &&
+          !!card.partnerCardId &&
+          sameDay.every((c) => c.id === card.partnerCardId && Math.abs(c.periodIndex - period) === 1);
+        if (!onlyPartner) return false;
+        break;
       }
-    } else {
-      if (!r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(card.teacherId)) {
-        const distinctDays = new Set(
-          currentScheduledCards.filter((c) => c.teacherId === card.teacherId).map((c) => c.dayIndex)
-        );
-        if (!distinctDays.has(day) && distinctDays.size >= maxDays) {
-          if (r.importance === 'strict') return false;
+      case 'max_gaps_daily_weekly': {
+        const maxDayGaps = r.maxGapsPerDay ?? 1;
+        if (r.targetEntity === 'classes') {
+          for (const cId of classesOf(card)) {
+            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
+            const extra = extendsNext ? [period, period + 1] : [period];
+            if (countGaps(classDaySlots(placed, cId, day, extra)) > maxDayGaps) return false;
+          }
+        } else {
+          for (const tId of teachersOf(card)) {
+            if (!inTeacherScope(r, tId)) continue;
+            const extra = [{ shift: card.shift, periodIndex: period }];
+            if (extendsNext) extra.push({ shift: card.shift, periodIndex: period + 1 });
+            if (countGaps(teacherDaySlots(tm, placed, tId, day, extra)) > maxDayGaps) return false;
+          }
         }
+        break;
       }
+      case 'teaching_days_limit': {
+        const maxDays = r.maxDaysPerWeek ?? 5;
+        if (r.targetEntity === 'classes') {
+          for (const cId of classesOf(card)) {
+            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
+            const days = new Set(placed.filter((c) => cardUsesClass(c, cId)).map((c) => c.dayIndex));
+            if (!days.has(day) && days.size >= maxDays) return false;
+          }
+        } else {
+          for (const tId of teachersOf(card)) {
+            if (!inTeacherScope(r, tId)) continue;
+            const days = new Set(placed.filter((c) => cardUsesTeacher(c, tId)).map((c) => c.dayIndex));
+            if (!days.has(day) && days.size >= maxDays) return false;
+          }
+        }
+        break;
+      }
+      case 'minimize_shift_crossing_gap': {
+        const maxCrossGap = r.maxCrossShiftGap ?? 1;
+        for (const tId of teachersOf(card)) {
+          if (!inTeacherScope(r, tId)) continue;
+          const dayCards = placed.filter((c) => cardUsesTeacher(c, tId) && c.dayIndex === day);
+          const prevShift = dayCards.filter((c) => c.shift === card.shift - 1);
+          const nextShift = dayCards.filter((c) => c.shift === card.shift + 1);
+          if (prevShift.length > 0) {
+            const prevPeriods = tm.periodsCount(card.shift - 1);
+            const maxP = Math.max(...prevShift.map((c) => c.periodIndex));
+            if (prevPeriods - 1 - maxP + period > maxCrossGap) return false;
+          }
+          if (nextShift.length > 0) {
+            const myP = extendsNext ? period + 1 : period;
+            const minP = Math.min(...nextShift.map((c) => c.periodIndex));
+            if (periodsCount - 1 - myP + minP > maxCrossGap) return false;
+          }
+        }
+        break;
+      }
+      default:
+        break;
     }
   }
-
-  // 14. Relationship Constraint 12: 2 буюу 3 ээлж дамжих цонхыг бага байлгах (minimize_shift_crossing_gap)
-  for (const r of relationships) {
-    if (!r.isActive || r.condition !== 'minimize_shift_crossing_gap') continue;
-    if (r.teacherIds && r.teacherIds.length > 0 && !r.teacherIds.includes(card.teacherId)) continue;
-    const maxCrossGap = r.maxCrossShiftGap ?? 1;
-
-    const teacherDayCards = currentScheduledCards.filter(
-      (c) => c.teacherId === card.teacherId && c.dayIndex === day
-    );
-
-    const shift1Cards = teacherDayCards.filter((c) => c.shift === 1);
-    const shift2Cards = teacherDayCards.filter((c) => c.shift === 2);
-    const s1Config = settings.shifts.find((s) => s.shiftNumber === 1);
-    const s1Periods = s1Config?.periodsCount || 6;
-
-    if (card.shift === 2 && shift1Cards.length > 0) {
-      const maxP1 = Math.max(...shift1Cards.map((c) => c.periodIndex));
-      const crossGap = (s1Periods - 1 - maxP1) + period;
-      if (crossGap > maxCrossGap && r.importance === 'strict') {
-        return false;
-      }
-    } else if (card.shift === 1 && shift2Cards.length > 0) {
-      const minP2 = Math.min(...shift2Cards.map((c) => c.periodIndex));
-      const myP = card.isDouble ? period + 1 : period;
-      const crossGap = (s1Periods - 1 - myP) + minP2;
-      if (crossGap > maxCrossGap && r.importance === 'strict') {
-        return false;
-      }
-    }
-  }
-
   return true;
 }
 
 /**
  * Main Timetable Generator
+ *
+ * 1-р шат: бүх хатуу хязгаарлалт нэгдсэн цөмөөр (constraints.ts) шалгагдана.
+ * Байршуулах арга (greedy) нь 2-р шатанд буцаалттай хайлтаар солигдоно.
  */
 export async function generateTimetable(
   subjects: Subject[],
@@ -536,62 +443,90 @@ export async function generateTimetable(
   const startTime = Date.now();
   const { cardsToPlace, lockedCards } = expandContractsToCards(contracts, classes, existingCards);
 
-  const teacherSchedule = new Map<string, Set<string>>();
-  const roomSchedule = new Map<string, Set<string>>();
-  const classSchedule = new Map<string, ClassSlotState>();
+  const ctx: ConstraintContext = { settings, teachers, classes, classrooms, subjects };
+  const occ = new Occupancy(ctx);
+  const tm = occ.tm;
 
-  const resultCards: ScheduledCard[] = [...lockedCards];
+  const resultCards: ScheduledCard[] = [];
+  for (const c of lockedCards) {
+    const enriched = enrichFromContract(c, contracts);
+    resultCards.push(enriched);
+    occ.add(enriched);
+  }
 
-  const recordSlotUsage = (
-    classId: string,
-    teacherId: string,
-    shift: number,
-    day: number,
-    period: number,
-    subgroupName?: string,
-    classroomId?: string
-  ) => {
-    const classKey = `${classId}_${day}_${period}`;
-    const teacherKey = `${shift}_${day}_${period}`;
-    const roomKey = `${shift}_${day}_${period}`;
-
-    // Teacher
-    if (!teacherSchedule.has(teacherId)) teacherSchedule.set(teacherId, new Set());
-    teacherSchedule.get(teacherId)!.add(teacherKey);
-
-    // Class
-    let clsState = classSchedule.get(classKey);
-    if (!clsState) {
-      clsState = { hasWholeClass: false, subgroups: new Set() };
-      classSchedule.set(classKey, clsState);
+  /** Бүлэг картыг (багц, хос) тухайн өдөр түр байрлуулж үзнэ. Амжилттай бол байрлуулсан картуудыг буцаана. */
+  const tryPlaceGroup = (items: { card: CardToPlace; period: number }[], day: number): ScheduledCard[] | null => {
+    const added: ScheduledCard[] = [];
+    let ok = true;
+    for (const { card, period } of items) {
+      if (period < 0 || period >= tm.periodsCount(card.shift)) {
+        ok = false;
+        break;
+      }
+      const sc = toScheduled(card, day, period);
+      if (!occ.canPlace(sc) || !rulesAllow(card, day, period, tm, relationships, resultCards)) {
+        ok = false;
+        break;
+      }
+      occ.add(sc);
+      resultCards.push(sc);
+      added.push(sc);
     }
-    if (subgroupName) {
-      clsState.subgroups.add(subgroupName);
-    } else {
-      clsState.hasWholeClass = true;
+    if (!ok) {
+      for (const sc of added) {
+        occ.remove(sc);
+        resultCards.splice(resultCards.indexOf(sc), 1);
+      }
+      return null;
     }
+    return added;
+  };
 
-    // Room
-    if (classroomId) {
-      if (!roomSchedule.has(classroomId)) roomSchedule.set(classroomId, new Set());
-      roomSchedule.get(classroomId)!.add(roomKey);
+  const rollback = (added: ScheduledCard[]) => {
+    for (const sc of added) {
+      occ.remove(sc);
+      resultCards.splice(resultCards.indexOf(sc), 1);
     }
   };
 
-  // Populate locked usage
-  for (const card of lockedCards) {
-    recordSlotUsage(
-      card.classId,
-      card.teacherId,
-      card.shift,
-      card.dayIndex,
-      card.periodIndex,
-      card.subgroupName,
-      card.classroomId
-    );
-  }
+  /** Боломжит бүх нүдийг туршаад хамгийн бага торгуультайд байрлуулна */
+  const placeBest = (
+    shift: number,
+    lastStartOffset: number,
+    build: (period: number) => { card: CardToPlace; period: number }[],
+    penaltyOf: (day: number, period: number) => number
+  ): boolean => {
+    let best: { day: number; period: number; penalty: number } | null = null;
+    const periods = tm.periodsCount(shift);
+    for (let day = 0; day < settings.daysPerWeek; day++) {
+      for (let period = 0; period < periods - lastStartOffset; period++) {
+        const added = tryPlaceGroup(build(period), day);
+        if (!added) continue;
+        rollback(added);
+        const penalty = penaltyOf(day, period);
+        if (!best || penalty < best.penalty) best = { day, period, penalty };
+      }
+    }
+    if (!best) return false;
+    return tryPlaceGroup(build(best.period), best.day) !== null;
+  };
 
-  // Pre-process bundles:
+  // А/Б: эсрэг 7 хоногийн карттай нүдийг хуваалцахыг илүүд үзнэ
+  const abBonus = (card: CardToPlace, day: number, period: number) => {
+    if (card.weekCycle === 'all') return 0;
+    const opposite = card.weekCycle === 'week_a' ? 'week_b' : 'week_a';
+    return resultCards.some(
+      (rc) =>
+        rc.weekCycle === opposite &&
+        rc.dayIndex === day &&
+        rc.periodIndex === period &&
+        classesOf(rc).some((c) => classesOf(card).includes(c))
+    )
+      ? -60
+      : 0;
+  };
+
+  // --- Дэд бүлгийн зэрэгцээ багцууд ---
   const crossSubgroupRules = relationships.filter(
     (r) =>
       r.isActive &&
@@ -599,52 +534,44 @@ export async function generateTimetable(
       r.parallelPairs &&
       r.parallelPairs.length >= 2
   );
-
   const sameSubgroupRules = relationships.filter(
     (r) => r.isActive && r.condition === 'same_subject_subgroups_simultaneous'
   );
 
   const parallelBundles: CardToPlace[][] = [];
   const processedCardIds = new Set<string>();
+  // Хос цагийн хагасууд багцад орохгүй (хос шинжээ алдахгүйн тулд)
+  const bundleable = (c: CardToPlace) => !processedCardIds.has(c.id) && !c.isDouble;
 
-  // A) Form cross-subject parallel bundles (Rule 2b)
   for (const rule of crossSubgroupRules) {
     const targetClasses =
-      rule.classIds && rule.classIds.length > 0
-        ? classes.filter((c) => rule.classIds.includes(c.id))
-        : classes;
-
+      rule.classIds && rule.classIds.length > 0 ? classes.filter((c) => rule.classIds.includes(c.id)) : classes;
     for (const cls of targetClasses) {
       const pair1 = rule.parallelPairs![0];
       const pair2 = rule.parallelPairs![1];
-
       const cards1 = cardsToPlace.filter(
         (c) =>
-          !processedCardIds.has(c.id) &&
+          bundleable(c) &&
           c.classId === cls.id &&
           c.subjectId === pair1.subjectId &&
           (!pair1.subgroupName || c.subgroupName === pair1.subgroupName)
       );
       const cards2 = cardsToPlace.filter(
         (c) =>
-          !processedCardIds.has(c.id) &&
+          bundleable(c) &&
           c.classId === cls.id &&
           c.subjectId === pair2.subjectId &&
           (!pair2.subgroupName || c.subgroupName === pair2.subgroupName)
       );
-
       const minLen = Math.min(cards1.length, cards2.length);
       for (let i = 0; i < minLen; i++) {
-        const c1 = cards1[i];
-        const c2 = cards2[i];
-        parallelBundles.push([c1, c2]);
-        processedCardIds.add(c1.id);
-        processedCardIds.add(c2.id);
+        parallelBundles.push([cards1[i], cards2[i]]);
+        processedCardIds.add(cards1[i].id);
+        processedCardIds.add(cards2[i].id);
       }
     }
   }
 
-  // B) Form same-subject parallel bundles (Rule 2a)
   for (const cls of classes) {
     for (const sub of subjects) {
       const isRuleActive =
@@ -654,327 +581,108 @@ export async function generateTimetable(
             (!r.classIds || r.classIds.length === 0 || r.classIds.includes(cls.id)) &&
             (!r.subjectIds || r.subjectIds.length === 0 || r.subjectIds.includes(sub.id))
         );
+      if (!isRuleActive) continue;
 
-      if (isRuleActive) {
-        const subCards = cardsToPlace.filter(
-          (c) =>
-            !processedCardIds.has(c.id) &&
-            c.classId === cls.id &&
-            c.subjectId === sub.id &&
-            Boolean(c.subgroupName)
-        );
+      const subCards = cardsToPlace.filter(
+        (c) => bundleable(c) && c.classId === cls.id && c.subjectId === sub.id && Boolean(c.subgroupName)
+      );
+      if (subCards.length < 2) continue;
 
-        if (subCards.length >= 2) {
-          const groupMap = new Map<string, CardToPlace[]>();
-          for (const c of subCards) {
-            const sg = c.subgroupName!;
-            if (!groupMap.has(sg)) groupMap.set(sg, []);
-            groupMap.get(sg)!.push(c);
-          }
-
-          const distinctGroups = Array.from(groupMap.keys());
-          if (distinctGroups.length >= 2) {
-            const minCount = Math.min(
-              ...distinctGroups.map((g) => groupMap.get(g)!.length)
-            );
-            for (let i = 0; i < minCount; i++) {
-              const bundle: CardToPlace[] = [];
-              for (const g of distinctGroups) {
-                const card = groupMap.get(g)![i];
-                bundle.push(card);
-                processedCardIds.add(card.id);
-              }
-              parallelBundles.push(bundle);
-            }
-          }
+      // Зөвхөн нэг хуваалтын бүлгүүдийг багцална
+      const byCategory = new Map<string, Map<string, CardToPlace[]>>();
+      for (const c of subCards) {
+        const cat = subgroupCategory(classes, cls.id, c.subgroupName!);
+        if (!byCategory.has(cat)) byCategory.set(cat, new Map());
+        const m = byCategory.get(cat)!;
+        if (!m.has(c.subgroupName!)) m.set(c.subgroupName!, []);
+        m.get(c.subgroupName!)!.push(c);
+      }
+      for (const groupMap of byCategory.values()) {
+        const groups = Array.from(groupMap.keys());
+        if (groups.length < 2) continue;
+        const minCount = Math.min(...groups.map((g) => groupMap.get(g)!.length));
+        for (let i = 0; i < minCount; i++) {
+          const bundle = groups.map((g) => groupMap.get(g)![i]);
+          bundle.forEach((c) => processedCardIds.add(c.id));
+          parallelBundles.push(bundle);
         }
       }
     }
   }
 
-  // C) Double pairs
+  // --- Хос ба дан картууд ---
   const doublePairs: { card1: CardToPlace; card2: CardToPlace }[] = [];
   const singleCards: CardToPlace[] = [];
-
   for (const card of cardsToPlace) {
     if (processedCardIds.has(card.id)) continue;
-
-    if (card.isDouble && card.partnerCardId) {
-      const partner = cardsToPlace.find(
-        (c) => c.id === card.partnerCardId && !processedCardIds.has(c.id)
-      );
+    if (card.doubleHalf === 'first' && card.partnerCardId) {
+      const partner = cardsToPlace.find((c) => c.id === card.partnerCardId && !processedCardIds.has(c.id));
       if (partner) {
         doublePairs.push({ card1: card, card2: partner });
         processedCardIds.add(card.id);
         processedCardIds.add(partner.id);
-      } else {
-        singleCards.push(card);
+        continue;
       }
-    } else {
-      singleCards.push(card);
+    }
+    if (card.doubleHalf === 'second') continue; // хамтрагчтайгаа хамт байрлана
+    singleCards.push(card);
+  }
+  // Хамтрагчгүй үлдсэн 2-р хагасууд
+  for (const card of cardsToPlace) {
+    if (!processedCardIds.has(card.id) && card.doubleHalf === 'second' && !doublePairs.some((p) => p.card2.id === card.id)) {
+      singleCards.push({ ...card, isDouble: false, doubleHalf: undefined, partnerCardId: undefined });
     }
   }
 
-  // --- Step 1: Place Parallel Subgroup Bundles ---
+  // --- 1. Багцууд ---
   onProgress?.(10, 'Зэрэгцээ дэд бүлгүүдийн хичээлүүдийг ижил цагт хуваарилж байна...');
-
   for (const bundle of parallelBundles) {
-    const shiftConf =
-      settings.shifts.find((s) => s.shiftNumber === bundle[0].shift) || settings.shifts[0];
-    const periodsCount = shiftConf?.periodsCount || 6;
-
-    const candidates: { day: number; period: number; penalty: number }[] = [];
-
-    for (let day = 0; day < settings.daysPerWeek; day++) {
-      for (let period = 0; period < periodsCount; period++) {
-        let allValid = true;
-        for (const bCard of bundle) {
-          if (
-            !isValidPlacement(
-              bCard,
-              day,
-              period,
-              classes,
-              teachers,
-              subjects,
-              classrooms,
-              settings,
-              teacherSchedule,
-              roomSchedule,
-              classSchedule,
-              relationships,
-              resultCards
-            )
-          ) {
-            allValid = false;
-            break;
-          }
-        }
-
-        if (allValid) {
-          const penalty = Math.abs(period - 2.5) * 5;
-          candidates.push({ day, period, penalty });
-        }
-      }
-    }
-
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => a.penalty - b.penalty);
-      const best = candidates[0];
-
-      for (const bCard of bundle) {
-        recordSlotUsage(
-          bCard.classId,
-          bCard.teacherId,
-          bCard.shift,
-          best.day,
-          best.period,
-          bCard.subgroupName,
-          bCard.classroomId
-        );
-
-        resultCards.push({
-          id: bCard.id,
-          contractId: bCard.contractId,
-          subjectId: bCard.subjectId,
-          teacherId: bCard.teacherId,
-          classId: bCard.classId,
-          subgroupName: bCard.subgroupName,
-          classroomId: bCard.classroomId,
-          shift: bCard.shift,
-          weekCycle: bCard.weekCycle,
-          dayIndex: best.day,
-          periodIndex: best.period,
-        });
-      }
-    }
+    const ok = placeBest(
+      bundle[0].shift,
+      0,
+      (period) => bundle.map((card) => ({ card, period })),
+      (_day, period) => Math.abs(period - 2.5) * 5
+    );
+    // Зэрэгцүүлэх боломжгүй бол (жишээ нь нэг багш хоёр бүлгийг заадаг) тус тусад нь байршуулна;
+    // зэрэгцээгүй нь verify-д дүрмийн зөрчил болж харагдана.
+    if (!ok) singleCards.push(...bundle);
   }
 
-  // --- Step 2: Place Double Pairs ---
+  // --- 2. Хос цагууд ---
   onProgress?.(35, 'Хос цагийн хичээлүүдийг байршуулж байна...');
-
-  for (let idx = 0; idx < doublePairs.length; idx++) {
-    const { card1, card2 } = doublePairs[idx];
-    const shiftConf =
-      settings.shifts.find((s) => s.shiftNumber === card1.shift) || settings.shifts[0];
-    const periodsCount = shiftConf?.periodsCount || 6;
-
-    const candidates: { day: number; period: number; penalty: number }[] = [];
-
-    for (let day = 0; day < settings.daysPerWeek; day++) {
-      for (let period = 0; period < periodsCount - 1; period++) {
-        const v1 = isValidPlacement(
-          card1,
-          day,
-          period,
-          classes,
-          teachers,
-          subjects,
-          classrooms,
-          settings,
-          teacherSchedule,
-          roomSchedule,
-          classSchedule,
-          relationships,
-          resultCards
-        );
-        const v2 = isValidPlacement(
-          card2,
-          day,
-          period + 1,
-          classes,
-          teachers,
-          subjects,
-          classrooms,
-          settings,
-          teacherSchedule,
-          roomSchedule,
-          classSchedule,
-          relationships,
-          resultCards
-        );
-
-        if (v1 && v2) {
-          candidates.push({ day, period, penalty: period * 2 });
-        }
-      }
-    }
-
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => a.penalty - b.penalty);
-      const best = candidates[0];
-
-      recordSlotUsage(
-        card1.classId,
-        card1.teacherId,
-        card1.shift,
-        best.day,
-        best.period,
-        card1.subgroupName,
-        card1.classroomId
-      );
-      recordSlotUsage(
-        card2.classId,
-        card2.teacherId,
-        card2.shift,
-        best.day,
-        best.period + 1,
-        card2.subgroupName,
-        card2.classroomId
-      );
-
-      resultCards.push({
-        id: card1.id,
-        contractId: card1.contractId,
-        subjectId: card1.subjectId,
-        teacherId: card1.teacherId,
-        classId: card1.classId,
-        subgroupName: card1.subgroupName,
-        classroomId: card1.classroomId,
-        shift: card1.shift,
-        weekCycle: card1.weekCycle,
-        dayIndex: best.day,
-        periodIndex: best.period,
-        isDoublePart: 'first',
-        linkedCardId: card2.id,
-      });
-
-      resultCards.push({
-        id: card2.id,
-        contractId: card2.contractId,
-        subjectId: card2.subjectId,
-        teacherId: card2.teacherId,
-        classId: card2.classId,
-        subgroupName: card2.subgroupName,
-        classroomId: card2.classroomId,
-        shift: card2.shift,
-        weekCycle: card2.weekCycle,
-        dayIndex: best.day,
-        periodIndex: best.period + 1,
-        isDoublePart: 'second',
-        linkedCardId: card1.id,
-      });
-    }
+  for (const { card1, card2 } of doublePairs) {
+    placeBest(
+      card1.shift,
+      1,
+      (period) => [
+        { card: card1, period },
+        { card: card2, period: period + 1 },
+      ],
+      (day, period) => period * 2 + abBonus(card1, day, period)
+    );
   }
 
-  // --- Step 3: Place Single Cards ---
+  // --- 3. Дан цагууд ---
   onProgress?.(65, 'Дан хичээлүүдийг хуваарилж байна...');
-
-  for (let i = 0; i < singleCards.length; i++) {
-    const card = singleCards[i];
-    const shiftConf =
-      settings.shifts.find((s) => s.shiftNumber === card.shift) || settings.shifts[0];
-    const periodsCount = shiftConf?.periodsCount || 6;
-
-    const candidates: { day: number; period: number; penalty: number }[] = [];
-
-    for (let day = 0; day < settings.daysPerWeek; day++) {
-      for (let period = 0; period < periodsCount; period++) {
+  for (const card of singleCards) {
+    placeBest(
+      card.shift,
+      0,
+      (period) => [{ card, period }],
+      (day, period) => {
+        let penalty = 0;
         if (
-          isValidPlacement(
-            card,
-            day,
-            period,
-            classes,
-            teachers,
-            subjects,
-            classrooms,
-            settings,
-            teacherSchedule,
-            roomSchedule,
-            classSchedule,
-            relationships,
-            resultCards
+          resultCards.some(
+            (rc) => rc.classId === card.classId && rc.subjectId === card.subjectId && rc.dayIndex === day
           )
-        ) {
-          let penalty = 0;
-
-          // Subject spread
-          const alreadyHasSubjectOnDay = resultCards.some(
-            (rc) =>
-              rc.classId === card.classId &&
-              rc.subjectId === card.subjectId &&
-              rc.dayIndex === day
-          );
-          if (alreadyHasSubjectOnDay) penalty += 100;
-
-          // Prefer morning for math
-          const sub = subjects.find((s) => s.id === card.subjectId);
-          if (sub?.shortName === 'Мат' && period <= 2) penalty -= 20;
-
-          candidates.push({ day, period, penalty });
-        }
+        )
+          penalty += 100;
+        const sub = subjects.find((s) => s.id === card.subjectId);
+        if (sub?.shortName === 'Мат' && period <= 2) penalty -= 20;
+        penalty += abBonus(card, day, period);
+        return penalty;
       }
-    }
-
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => a.penalty - b.penalty);
-      const best = candidates[0];
-
-      recordSlotUsage(
-        card.classId,
-        card.teacherId,
-        card.shift,
-        best.day,
-        best.period,
-        card.subgroupName,
-        card.classroomId
-      );
-
-      resultCards.push({
-        id: card.id,
-        contractId: card.contractId,
-        subjectId: card.subjectId,
-        teacherId: card.teacherId,
-        classId: card.classId,
-        subgroupName: card.subgroupName,
-        classroomId: card.classroomId,
-        shift: card.shift,
-        weekCycle: card.weekCycle,
-        dayIndex: best.day,
-        periodIndex: best.period,
-      });
-    }
+    );
   }
 
   onProgress?.(90, 'Зөрчил, хамаарлууд болон бүх дүрмүүдийг шалгаж байна...');
@@ -985,7 +693,8 @@ export async function generateTimetable(
     classes,
     classrooms,
     settings,
-    relationships
+    relationships,
+    contracts
   );
 
   const hardConflicts = conflicts.filter((c) => c.severity === 'error').length;
@@ -995,12 +704,8 @@ export async function generateTimetable(
 
   const generationTimeMs = Date.now() - startTime;
   const totalCardsCount = cardsToPlace.length + lockedCards.length;
-  const placedPercentage =
-    totalCardsCount > 0 ? (resultCards.length / totalCardsCount) * 100 : 100;
-  const fitnessScore = Math.max(
-    0,
-    Math.round(placedPercentage - hardConflicts * 20 - softConflicts * 2)
-  );
+  const placedPercentage = totalCardsCount > 0 ? (resultCards.length / totalCardsCount) * 100 : 100;
+  const fitnessScore = Math.max(0, Math.round(placedPercentage - hardConflicts * 20 - softConflicts * 2));
 
   return {
     scheduledCards: resultCards,
@@ -1017,115 +722,173 @@ export async function generateTimetable(
   };
 }
 
+/** Хуучин хадгалсан картад хамтран заах багш, хамтатгасан ангийг гэрээнээс нөхнө */
+function enrichFromContract(card: ScheduledCard, contracts?: LessonContract[]): ScheduledCard {
+  if (!contracts) return card;
+  const ct = contracts.find((l) => l.id === card.contractId);
+  if (!ct) return card;
+  const out = { ...card };
+  if (!out.coTeacherIds && ct.coTeacherIds && ct.coTeacherIds.length > 0) out.coTeacherIds = [...ct.coTeacherIds];
+  if (!out.jointClassIds && ct.jointClassIds && ct.jointClassIds.length > 0) out.jointClassIds = [...ct.jointClassIds];
+  return out;
+}
+
+function slotLabel(settings: SchoolSettings, day: number, period: number, shift?: number): string {
+  const dayName = settings.dayNames[day] || `${day + 1}-р өдөр`;
+  return `${dayName} гарагийн ${period + 1}-р цагт${shift ? ` (${shift}-р ээлж)` : ''}`;
+}
+
 /**
  * Verification Engine
  */
 export function verifyTimetable(
-  cards: ScheduledCard[],
+  rawCards: ScheduledCard[],
   subjects: Subject[],
   teachers: Teacher[],
   classes: ClassGroup[],
   classrooms: Classroom[],
   settings: SchoolSettings,
-  relationships: CardRelationship[] = []
+  relationships: CardRelationship[] = [],
+  lessons?: LessonContract[]
 ): ConflictIssue[] {
   const issues: ConflictIssue[] = [];
+  const cards = lessons ? rawCards.map((c) => enrichFromContract(c, lessons)) : rawCards;
+  const tm = buildTimeModel(settings);
+  const ctx: ConstraintContext = { settings, teachers, classes, classrooms, subjects };
+  const teacherName = (id: string) => teachers.find((t) => t.id === id)?.name || 'Багш';
+  const className = (id: string) => classes.find((c) => c.id === id)?.name || 'Анги';
 
-  const teacherSlots = new Map<string, ScheduledCard[]>();
-  const classSlots = new Map<string, ScheduledCard[]>();
-  const roomSlots = new Map<string, ScheduledCard[]>();
-
-  for (const card of cards) {
-    const classSlotKey = `${card.classId}_${card.dayIndex}_${card.periodIndex}`;
-    const teacherSlotKey = `${card.teacherId}_${card.shift}_${card.dayIndex}_${card.periodIndex}`;
-
-    // Teacher check
-    if (!teacherSlots.has(teacherSlotKey)) teacherSlots.set(teacherSlotKey, []);
-    teacherSlots.get(teacherSlotKey)!.push(card);
-
-    // Class check
-    if (!classSlots.has(classSlotKey)) classSlots.set(classSlotKey, []);
-    classSlots.get(classSlotKey)!.push(card);
-
-    // Room check
-    if (card.classroomId) {
-      const room = classrooms.find((r) => r.id === card.classroomId);
-      if (room && !room.isShared) {
-        const roomKey = `${card.classroomId}_${card.shift}_${card.dayIndex}_${card.periodIndex}`;
-        if (!roomSlots.has(roomKey)) roomSlots.set(roomKey, []);
-        roomSlots.get(roomKey)!.push(card);
+  // 1. Нөөцийн давхардал (багш, хамтран заах багш, анги, хамтатгасан анги, дэд бүлгийн хуваалт)
+  const seen = new Set<string>();
+  const byDay = new Map<number, ScheduledCard[]>();
+  for (const c of cards) {
+    if (!byDay.has(c.dayIndex)) byDay.set(c.dayIndex, []);
+    byDay.get(c.dayIndex)!.push(c);
+  }
+  for (const dayCards of byDay.values()) {
+    for (let i = 0; i < dayCards.length; i++) {
+      for (let j = i + 1; j < dayCards.length; j++) {
+        const a = dayCards[i];
+        const b = dayCards[j];
+        if (!weeksOverlap(a.weekCycle, b.weekCycle) || !timesOverlap(tm, a, b)) continue;
+        for (const clash of pairClashes(classes, a, b)) {
+          const key = `${clash.kind}_${clash.resourceId}_${a.dayIndex}_${tm.globalIndex(a.shift, a.periodIndex)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (clash.kind === 'teacher') {
+            issues.push({
+              id: `clash_t_${key}`,
+              type: 'clash_teacher',
+              severity: 'error',
+              title: 'Багшийн цагийн давхардал',
+              description: `${teacherName(clash.resourceId)} ${slotLabel(settings, a.dayIndex, a.periodIndex, a.shift)} ${className(a.classId)} ба ${className(b.classId)}-д зэрэг орохоор байна.`,
+              dayIndex: a.dayIndex,
+              periodIndex: a.periodIndex,
+              shift: a.shift,
+              entityType: 'teacher',
+              entityId: clash.resourceId,
+              cardIds: [a.id, b.id],
+            });
+          } else {
+            const sa = a.subgroupName ? ` [${a.subgroupName}]` : '';
+            const sb = b.subgroupName ? ` [${b.subgroupName}]` : '';
+            issues.push({
+              id: `clash_c_${key}`,
+              type: 'clash_class',
+              severity: 'error',
+              title: 'Ангийн хичээлийн давхардал',
+              description: `${className(clash.resourceId)} ${slotLabel(settings, a.dayIndex, a.periodIndex)} давхардсан хичээлтэй байна${
+                sa || sb ? ` (${sa.trim() || 'бүхэл анги'} ба ${sb.trim() || 'бүхэл анги'} — сурагчид давхцана)` : ''
+              }.`,
+              dayIndex: a.dayIndex,
+              periodIndex: a.periodIndex,
+              shift: a.shift,
+              entityType: 'class',
+              entityId: clash.resourceId,
+              cardIds: [a.id, b.id],
+            });
+          }
+        }
       }
     }
-  }
 
-  // 1. Teacher clashes
-  for (const [, group] of teacherSlots.entries()) {
-    if (group.length > 1) {
-      const hasConflict = group.some((c1, i) =>
-        group.some((c2, j) => {
-          if (i === j) return false;
-          if (c1.weekCycle === 'week_a' && c2.weekCycle === 'week_b') return false;
-          if (c1.weekCycle === 'week_b' && c2.weekCycle === 'week_a') return false;
-          return true;
-        })
+    // Танхимын багтаамж
+    for (const a of dayCards) {
+      if (!a.classroomId) continue;
+      const room = classrooms.find((r) => r.id === a.classroomId);
+      const same = dayCards.filter(
+        (b) =>
+          b.classroomId === a.classroomId && weeksOverlap(a.weekCycle, b.weekCycle) && (b === a || timesOverlap(tm, a, b))
       );
-
-      if (hasConflict) {
-        const teacher = teachers.find((t) => t.id === group[0].teacherId);
-        const dayName = settings.dayNames[group[0].dayIndex] || `${group[0].dayIndex + 1}-р өдөр`;
+      const cap = roomCapacity(room);
+      if (same.length > cap) {
+        const key = `room_${a.classroomId}_${a.dayIndex}_${tm.globalIndex(a.shift, a.periodIndex)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         issues.push({
-          id: `clash_t_${group[0].id}`,
-          type: 'clash_teacher',
+          id: `clash_r_${key}`,
+          type: 'clash_room',
           severity: 'error',
-          title: 'Багшийн цагийн давхардал',
-          description: `${teacher?.name || 'Багш'} ${dayName} гарагийн ${
-            group[0].periodIndex + 1
-          }-р цагт (${group[0].shift}-р ээлж) олон ангид зэрэг орохоор байна.`,
-          dayIndex: group[0].dayIndex,
-          periodIndex: group[0].periodIndex,
-          shift: group[0].shift,
-          entityType: 'teacher',
-          entityId: group[0].teacherId,
+          title: 'Танхимын давхардал',
+          description: `${room?.name || 'Танхим'} ${slotLabel(settings, a.dayIndex, a.periodIndex, a.shift)} ${same.length} хичээлтэй (багтаамж: ${cap}).`,
+          dayIndex: a.dayIndex,
+          periodIndex: a.periodIndex,
+          shift: a.shift,
+          entityType: 'room',
+          entityId: a.classroomId,
+          cardIds: same.map((c) => c.id),
         });
       }
     }
   }
 
-  // 2. Class clashes (with subgroup support)
-  for (const [, group] of classSlots.entries()) {
-    if (group.length > 1) {
-      const sameWeekCards = group.filter((c1, i) =>
-        group.some((c2, j) => {
-          if (i === j) return false;
-          if (c1.weekCycle === 'week_a' && c2.weekCycle === 'week_b') return false;
-          if (c1.weekCycle === 'week_b' && c2.weekCycle === 'week_a') return false;
-          return true;
-        })
-      );
+  // 2. Чөлөөт цаг
+  const entityName = (type: string, id: string) =>
+    type === 'teacher'
+      ? teacherName(id)
+      : type === 'class'
+        ? className(id)
+        : type === 'room'
+          ? classrooms.find((r) => r.id === id)?.name || 'Танхим'
+          : subjects.find((s) => s.id === id)?.name || 'Хичээл';
+  const entityLabel: Record<string, string> = { teacher: 'багш', class: 'анги', room: 'танхим', subject: 'хичээл' };
+  for (const c of cards) {
+    for (const h of timeOffHits(ctx, c)) {
+      issues.push({
+        id: `timeoff_${h.entityType}_${h.entityId}_${c.id}`,
+        type: 'time_off_violation',
+        severity: h.status === 'forbidden' ? 'error' : 'warning',
+        title: h.status === 'forbidden' ? 'Хаалттай цагт хичээл тавигдсан' : 'Хүсээгүй цагт хичээл тавигдсан',
+        description: `${entityName(h.entityType, h.entityId)} (${entityLabel[h.entityType]}) ${slotLabel(settings, c.dayIndex, c.periodIndex, c.shift)} ${
+          h.status === 'forbidden' ? 'хаалттай' : 'хүсээгүй'
+        } байхад хичээл тавигдсан байна.`,
+        dayIndex: c.dayIndex,
+        periodIndex: c.periodIndex,
+        shift: c.shift,
+        entityType: h.entityType === 'subject' ? undefined : h.entityType,
+        entityId: h.entityId,
+        cardIds: [c.id],
+      });
+    }
+  }
 
-      if (sameWeekCards.length > 1) {
-        const subgroups = sameWeekCards.map((c) => c.subgroupName?.trim());
-        const hasWholeClassLesson = subgroups.some((s) => !s);
-        const uniqueSubgroups = new Set(subgroups);
-        const hasDuplicateSubgroups = subgroups.length !== uniqueSubgroups.size;
-
-        if (hasWholeClassLesson || hasDuplicateSubgroups) {
-          const cls = classes.find((c) => c.id === group[0].classId);
-          const dayName = settings.dayNames[group[0].dayIndex] || `${group[0].dayIndex + 1}-р өдөр`;
-          issues.push({
-            id: `clash_c_${group[0].id}`,
-            type: 'clash_class',
-            severity: 'error',
-            title: 'Ангийн хичээлийн давхардал',
-            description: `${cls?.name || 'Анги'} ${dayName} гарагийн ${
-              group[0].periodIndex + 1
-            }-р цагт нэгэн зэрэг давхардсан хичээл тавигдсан байна.`,
-            dayIndex: group[0].dayIndex,
-            periodIndex: group[0].periodIndex,
-            entityType: 'class',
-            entityId: group[0].classId,
-          });
-        }
+  // 3. Байршаагүй цаг
+  if (lessons) {
+    const placedByContract = new Map<string, number>();
+    for (const c of cards) placedByContract.set(c.contractId, (placedByContract.get(c.contractId) || 0) + 1);
+    for (const l of lessons) {
+      const missing = l.totalPeriods - (placedByContract.get(l.id) || 0);
+      if (missing > 0) {
+        const sub = subjects.find((s) => s.id === l.subjectId);
+        issues.push({
+          id: `unplaced_${l.id}`,
+          type: 'unplaced',
+          severity: 'warning',
+          title: 'Байршаагүй цаг',
+          description: `${className(l.classId)}${l.subgroupName ? ` [${l.subgroupName}]` : ''} — ${sub?.name || 'Хичээл'} (${teacherName(l.teacherId)}): ${missing} цаг хуваарьт ороогүй байна.`,
+          entityType: 'class',
+          entityId: l.classId,
+        });
       }
     }
   }
@@ -1227,7 +990,8 @@ export function verifyTimetable(
       const periodsCount = shiftConf?.periodsCount || 6;
 
       const matchCards = cards.filter(
-        (c) => c.classId === cls.id && r.subjectIds.includes(c.subjectId)
+        // Хос цагийн 2-р хагас 1-р хагасаараа шийдэгдэнэ
+        (c) => c.classId === cls.id && r.subjectIds.includes(c.subjectId) && c.isDoublePart !== 'second'
       );
 
       for (const card of matchCards) {
@@ -1311,27 +1075,25 @@ export function verifyTimetable(
     }
   }
 
-  // 7. Rule 5: Өдөрт заах цагийн хамгийн их/бага хязгаар (daily_hours_limit)
+  // 7. Rule 5: Өдөрт заах цагийн хамгийн их/бага хязгаар (daily_hours_limit) — давхардалгүй нүдээр тоолно
   for (const r of relationships) {
     if (!r.isActive || r.condition !== 'daily_hours_limit') continue;
     const minP = r.minPeriodsPerDay ?? 2;
     const maxP = r.maxPeriodsPerDay ?? 5;
+    const sev = r.importance === 'strict' ? 'error' : 'warning';
 
     if (r.targetEntity === 'classes') {
       const targetClasses =
-        r.classIds && r.classIds.length > 0
-          ? classes.filter((c) => r.classIds.includes(c.id))
-          : classes;
-
+        r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes;
       for (const cls of targetClasses) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const count = cards.filter((c) => c.classId === cls.id && c.dayIndex === d).length;
+          const count = classDaySlots(cards, cls.id, d).length;
           if (count > maxP || (count > 0 && count < minP)) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
-              id: `rule_daily_hrs_c_${cls.id}_${d}`,
+              id: `rule_daily_hrs_c_${r.id}_${cls.id}_${d}`,
               type: 'custom_constraint',
-              severity: r.importance === 'strict' ? 'error' : 'warning',
+              severity: sev,
               title: 'Ангийн өдрийн цагийн хязгаар зөрчигдсөн',
               description: `${cls.name} анги ${dayName} гарагт нийт ${count} цаг орж байна. (Зөвшөөрөгдөх: ${minP}-${maxP} цаг)`,
               dayIndex: d,
@@ -1342,21 +1104,17 @@ export function verifyTimetable(
         }
       }
     } else {
-      // Teachers
       const targetTeachers =
-        r.teacherIds && r.teacherIds.length > 0
-          ? teachers.filter((t) => r.teacherIds!.includes(t.id))
-          : teachers;
-
+        r.teacherIds && r.teacherIds.length > 0 ? teachers.filter((t) => r.teacherIds!.includes(t.id)) : teachers;
       for (const t of targetTeachers) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const count = cards.filter((c) => c.teacherId === t.id && c.dayIndex === d).length;
+          const count = teacherDaySlots(tm, cards, t.id, d).length;
           if (count > maxP || (count > 0 && count < minP)) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
-              id: `rule_daily_hrs_t_${t.id}_${d}`,
+              id: `rule_daily_hrs_t_${r.id}_${t.id}_${d}`,
               type: 'custom_constraint',
-              severity: r.importance === 'strict' ? 'error' : 'warning',
+              severity: sev,
               title: 'Багшийн өдөрт заах цагийн хязгаар зөрчигдсөн',
               description: `${t.name} багш ${dayName} гарагт нийт ${count} цаг орж байна. (Зөвшөөрөгдөх: ${minP}-${maxP} цаг)`,
               dayIndex: d,
@@ -1369,83 +1127,51 @@ export function verifyTimetable(
     }
   }
 
-  // 8. Rule 6: Дараалласан цагийн хамгийн их хязгаар (max_consecutive_periods)
+  // 8. Rule 6: Дараалласан цагийн хамгийн их хязгаар (max_consecutive_periods) — багшийнхыг бодит цагийн шугамаар
   for (const r of relationships) {
     if (!r.isActive || r.condition !== 'max_consecutive_periods') continue;
     const maxConsec = r.maxConsecutive ?? 3;
+    const sev = r.importance === 'strict' ? 'error' : 'warning';
 
     if (r.targetEntity === 'classes') {
       const targetClasses =
-        r.classIds && r.classIds.length > 0
-          ? classes.filter((c) => r.classIds.includes(c.id))
-          : classes;
-
+        r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes;
       for (const cls of targetClasses) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const periods = cards
-            .filter((c) => c.classId === cls.id && c.dayIndex === d)
-            .map((c) => c.periodIndex)
-            .sort((a, b) => a - b);
-
-          let consec = 1;
-          for (let i = 1; i < periods.length; i++) {
-            if (periods[i] === periods[i - 1] + 1) {
-              consec++;
-              if (consec > maxConsec) {
-                const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
-                issues.push({
-                  id: `rule_consec_c_${cls.id}_${d}_${i}`,
-                  type: 'custom_constraint',
-                  severity: r.importance === 'strict' ? 'error' : 'warning',
-                  title: 'Ангийн дараалласан цагийн хязгаар хэтэрсэн',
-                  description: `${cls.name} анги ${dayName} гарагт завсаргүй ${consec} цаг дараалан хичээлтэй байна. (Дээд хязгаар: ${maxConsec} цаг)`,
-                  dayIndex: d,
-                  entityType: 'class',
-                  entityId: cls.id,
-                });
-                break;
-              }
-            } else if (periods[i] > periods[i - 1] + 1) {
-              consec = 1;
-            }
+          const run = maxRun(classDaySlots(cards, cls.id, d));
+          if (run > maxConsec) {
+            const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
+            issues.push({
+              id: `rule_consec_c_${r.id}_${cls.id}_${d}`,
+              type: 'custom_constraint',
+              severity: sev,
+              title: 'Ангийн дараалласан цагийн хязгаар хэтэрсэн',
+              description: `${cls.name} анги ${dayName} гарагт завсаргүй ${run} цаг дараалан хичээлтэй байна. (Дээд хязгаар: ${maxConsec} цаг)`,
+              dayIndex: d,
+              entityType: 'class',
+              entityId: cls.id,
+            });
           }
         }
       }
     } else {
-      // Teachers
       const targetTeachers =
-        r.teacherIds && r.teacherIds.length > 0
-          ? teachers.filter((t) => r.teacherIds!.includes(t.id))
-          : teachers;
-
+        r.teacherIds && r.teacherIds.length > 0 ? teachers.filter((t) => r.teacherIds!.includes(t.id)) : teachers;
       for (const t of targetTeachers) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const periods = cards
-            .filter((c) => c.teacherId === t.id && c.dayIndex === d)
-            .map((c) => c.periodIndex)
-            .sort((a, b) => a - b);
-
-          let consec = 1;
-          for (let i = 1; i < periods.length; i++) {
-            if (periods[i] === periods[i - 1] + 1) {
-              consec++;
-              if (consec > maxConsec) {
-                const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
-                issues.push({
-                  id: `rule_consec_t_${t.id}_${d}_${i}`,
-                  type: 'custom_constraint',
-                  severity: r.importance === 'strict' ? 'error' : 'warning',
-                  title: 'Багшийн дараалласан цагийн хязгаар хэтэрсэн',
-                  description: `${t.name} багш ${dayName} гарагт завсаргүй ${consec} цаг дараалан хичээлтэй байна. (Дээд хязгаар: ${maxConsec} цаг)`,
-                  dayIndex: d,
-                  entityType: 'teacher',
-                  entityId: t.id,
-                });
-                break;
-              }
-            } else if (periods[i] > periods[i - 1] + 1) {
-              consec = 1;
-            }
+          const run = maxRun(teacherDaySlots(tm, cards, t.id, d));
+          if (run > maxConsec) {
+            const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
+            issues.push({
+              id: `rule_consec_t_${r.id}_${t.id}_${d}`,
+              type: 'custom_constraint',
+              severity: sev,
+              title: 'Багшийн дараалласан цагийн хязгаар хэтэрсэн',
+              description: `${t.name} багш ${dayName} гарагт завсаргүй ${run} цаг дараалан хичээлтэй байна. (Дээд хязгаар: ${maxConsec} цаг)`,
+              dayIndex: d,
+              entityType: 'teacher',
+              entityId: t.id,
+            });
           }
         }
       }
@@ -1453,59 +1179,50 @@ export function verifyTimetable(
   }
 
   // 9. Rule 7: 1 багш 1 анги бүлэгт өдөрт 1-с илүүгүй удаа орох (teacher_max_once_per_day)
-  const teacherDailyRules = relationships.filter(
-    (r) => r.isActive && r.condition === 'teacher_max_once_per_day'
-  );
+  const teacherDailyRules = relationships.filter((r) => r.isActive && r.condition === 'teacher_max_once_per_day');
+  if (teacherDailyRules.length > 0) {
+    const groups = new Map<string, { teacherId: string; classId: string; dayIndex: number; cards: ScheduledCard[] }>();
+    for (const card of cards) {
+      const key = JSON.stringify([card.teacherId, card.classId, card.dayIndex]);
+      if (!groups.has(key))
+        groups.set(key, { teacherId: card.teacherId, classId: card.classId, dayIndex: card.dayIndex, cards: [] });
+      groups.get(key)!.cards.push(card);
+    }
 
-  const teacherClassDays = new Map<string, ScheduledCard[]>();
-  for (const card of cards) {
-    const key = `${card.teacherId}_${card.classId}_${card.dayIndex}`;
-    if (!teacherClassDays.has(key)) teacherClassDays.set(key, []);
-    teacherClassDays.get(key)!.push(card);
-  }
+    for (const g of groups.values()) {
+      const matchingRule = teacherDailyRules.find(
+        (r) =>
+          (!r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(g.teacherId)) &&
+          (!r.classIds || r.classIds.length === 0 || r.classIds.includes(g.classId))
+      );
+      if (!matchingRule) continue;
 
-  for (const [key, dayCards] of teacherClassDays.entries()) {
-    const [teacherId, classId, dayStr] = key.split('_');
-    const dayIndex = Number(dayStr);
-    const teacher = teachers.find((t) => t.id === teacherId);
-    const cls = classes.find((c) => c.id === classId);
-    const dayName = settings.dayNames[dayIndex] || `${dayIndex + 1}-р өдөр`;
-
-    const matchingRule = teacherDailyRules.find((r) => {
-      const matchTeacher =
-        !r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(teacherId);
-      const matchClass =
-        !r.classIds || r.classIds.length === 0 || r.classIds.includes(classId);
-      return matchTeacher && matchClass;
-    });
-
-    if (matchingRule) {
-      const sortedCards = [...dayCards].sort((a, b) => a.periodIndex - b.periodIndex);
+      // Хос цагийн 2-р хагас, А/Б-ийн ээлжилсэн карт нэг оролт гэж тоологдоно
+      const sorted = [...g.cards].sort((a, b) => a.periodIndex - b.periodIndex);
       let visitCount = 0;
-      let lastPeriod = -99;
-
-      for (const c of sortedCards) {
-        if (matchingRule.allowDoubleConsecutive !== false) {
-          if (c.periodIndex === lastPeriod + 1) {
-            lastPeriod = c.periodIndex;
-            continue;
-          }
-        }
-        visitCount++;
-        lastPeriod = c.periodIndex;
+      const countedPeriods = new Set<number>();
+      for (const c of sorted) {
+        if (countedPeriods.has(c.periodIndex)) continue;
+        countedPeriods.add(c.periodIndex);
+        const isContinuation =
+          matchingRule.allowDoubleConsecutive !== false &&
+          c.isDoublePart === 'second' &&
+          sorted.some((p) => p.id === c.linkedCardId && p.periodIndex === c.periodIndex - 1);
+        if (!isContinuation) visitCount++;
       }
 
       const maxAllowed = matchingRule.value || 1;
       if (visitCount > maxAllowed) {
+        const dayName = settings.dayNames[g.dayIndex] || `${g.dayIndex + 1}-р өдөр`;
         issues.push({
-          id: `rule_t_daily_${key}`,
+          id: `rule_t_daily_${matchingRule.id}_${g.teacherId}_${g.classId}_${g.dayIndex}`,
           type: 'custom_constraint',
           severity: matchingRule.importance === 'strict' ? 'error' : 'warning',
           title: 'Багшийн өдрийн оролтын хязгаарлалт хэтэрсэн',
-          description: `${teacher?.name || 'Багш'} ${cls?.name || 'Анги'}-д ${dayName} гарагт өдөрт ${visitCount} удаа (зөвшөөрөгдөх: ${maxAllowed} удаа) хичээл орохоор байна. (Дүрэм: Өдөрт 1-с илүүгүй удаа орох)`,
-          dayIndex,
+          description: `${teacherName(g.teacherId)} ${className(g.classId)}-д ${dayName} гарагт ${visitCount} удаа (зөвшөөрөгдөх: ${maxAllowed} удаа) хичээл орохоор байна. (Дүрэм: Өдөрт 1-с илүүгүй удаа орох)`,
+          dayIndex: g.dayIndex,
           entityType: 'teacher',
-          entityId: teacherId,
+          entityId: g.teacherId,
         });
       }
     }
@@ -1636,105 +1353,45 @@ export function verifyTimetable(
     if (!r.isActive || r.condition !== 'max_gaps_daily_weekly') continue;
     const maxDayGaps = r.maxGapsPerDay ?? 1;
     const maxWeekGaps = r.maxGapsPerWeek ?? 3;
+    const sev = r.importance === 'strict' ? 'error' : 'warning';
+    const isClasses = r.targetEntity === 'classes';
 
-    if (r.targetEntity === 'classes') {
-      const targetClasses =
-        r.classIds && r.classIds.length > 0
-          ? classes.filter((c) => r.classIds.includes(c.id))
-          : classes;
+    const targets: { id: string; name: string }[] = isClasses
+      ? (r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes)
+      : r.teacherIds && r.teacherIds.length > 0
+        ? teachers.filter((t) => r.teacherIds!.includes(t.id))
+        : teachers;
 
-      for (const cls of targetClasses) {
-        let weeklyGaps = 0;
-        for (let d = 0; d < settings.daysPerWeek; d++) {
-          const periods = cards
-            .filter((c) => c.classId === cls.id && c.dayIndex === d)
-            .map((c) => c.periodIndex)
-            .sort((a, b) => a - b);
-
-          if (periods.length >= 2) {
-            const minP = periods[0];
-            const maxP = periods[periods.length - 1];
-            const uniquePeriods = new Set(periods);
-            const dailyGaps = maxP - minP + 1 - uniquePeriods.size;
-            weeklyGaps += dailyGaps;
-
-            if (dailyGaps > maxDayGaps) {
-              const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
-              issues.push({
-                id: `rule_gaps_day_c_${cls.id}_${d}`,
-                type: 'gap_excess',
-                severity: r.importance === 'strict' ? 'error' : 'warning',
-                title: 'Ангийн өдрийн цонх хэтэрсэн',
-                description: `${cls.name} анги ${dayName} гарагт нийт ${dailyGaps} цонхтой байна. (Дээд хязгаар: ${maxDayGaps} цонх)`,
-                dayIndex: d,
-                entityType: 'class',
-                entityId: cls.id,
-              });
-            }
-          }
-        }
-
-        if (weeklyGaps > maxWeekGaps) {
+    for (const ent of targets) {
+      let weeklyGaps = 0;
+      for (let d = 0; d < settings.daysPerWeek; d++) {
+        const slots = isClasses ? classDaySlots(cards, ent.id, d) : teacherDaySlots(tm, cards, ent.id, d);
+        const dailyGaps = countGaps(slots);
+        weeklyGaps += dailyGaps;
+        if (dailyGaps > maxDayGaps) {
+          const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
           issues.push({
-            id: `rule_gaps_week_c_${cls.id}`,
+            id: `rule_gaps_day_${isClasses ? 'c' : 't'}_${r.id}_${ent.id}_${d}`,
             type: 'gap_excess',
-            severity: r.importance === 'strict' ? 'error' : 'warning',
-            title: 'Ангийн 7 хоногийн нийт цонх хэтэрсэн',
-            description: `${cls.name} анги 7 хоногт нийт ${weeklyGaps} цонхтой байна. (Дээд хязгаар: ${maxWeekGaps} цонх)`,
-            entityType: 'class',
-            entityId: cls.id,
+            severity: sev,
+            title: isClasses ? 'Ангийн өдрийн цонх хэтэрсэн' : 'Багшийн өдрийн цонх хэтэрсэн',
+            description: `${ent.name} ${isClasses ? 'анги' : 'багш'} ${dayName} гарагт нийт ${dailyGaps} цонхтой байна. (Дээд хязгаар: ${maxDayGaps} цонх)`,
+            dayIndex: d,
+            entityType: isClasses ? 'class' : 'teacher',
+            entityId: ent.id,
           });
         }
       }
-    } else {
-      // Teachers
-      const targetTeachers =
-        r.teacherIds && r.teacherIds.length > 0
-          ? teachers.filter((t) => r.teacherIds!.includes(t.id))
-          : teachers;
-
-      for (const t of targetTeachers) {
-        let weeklyGaps = 0;
-        for (let d = 0; d < settings.daysPerWeek; d++) {
-          const periods = cards
-            .filter((c) => c.teacherId === t.id && c.dayIndex === d)
-            .map((c) => c.periodIndex)
-            .sort((a, b) => a - b);
-
-          if (periods.length >= 2) {
-            const minP = periods[0];
-            const maxP = periods[periods.length - 1];
-            const uniquePeriods = new Set(periods);
-            const dailyGaps = maxP - minP + 1 - uniquePeriods.size;
-            weeklyGaps += dailyGaps;
-
-            if (dailyGaps > maxDayGaps) {
-              const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
-              issues.push({
-                id: `rule_gaps_day_t_${t.id}_${d}`,
-                type: 'gap_excess',
-                severity: r.importance === 'strict' ? 'error' : 'warning',
-                title: 'Багшийн өдрийн цонх хэтэрсэн',
-                description: `${t.name} багш ${dayName} гарагт нийт ${dailyGaps} цонхтой байна. (Дээд хязгаар: ${maxDayGaps} цонх)`,
-                dayIndex: d,
-                entityType: 'teacher',
-                entityId: t.id,
-              });
-            }
-          }
-        }
-
-        if (weeklyGaps > maxWeekGaps) {
-          issues.push({
-            id: `rule_gaps_week_t_${t.id}`,
-            type: 'gap_excess',
-            severity: r.importance === 'strict' ? 'error' : 'warning',
-            title: 'Багшийн 7 хоногийн нийт цонх хэтэрсэн',
-            description: `${t.name} багш 7 хоногт нийт ${weeklyGaps} цонхтой байна. (Дээд хязгаар: ${maxWeekGaps} цонх)`,
-            entityType: 'teacher',
-            entityId: t.id,
-          });
-        }
+      if (weeklyGaps > maxWeekGaps) {
+        issues.push({
+          id: `rule_gaps_week_${isClasses ? 'c' : 't'}_${r.id}_${ent.id}`,
+          type: 'gap_excess',
+          severity: sev,
+          title: isClasses ? 'Ангийн 7 хоногийн нийт цонх хэтэрсэн' : 'Багшийн 7 хоногийн нийт цонх хэтэрсэн',
+          description: `${ent.name} ${isClasses ? 'анги' : 'багш'} 7 хоногт нийт ${weeklyGaps} цонхтой байна. (Дээд хязгаар: ${maxWeekGaps} цонх)`,
+          entityType: isClasses ? 'class' : 'teacher',
+          entityId: ent.id,
+        });
       }
     }
   }
@@ -1744,51 +1401,31 @@ export function verifyTimetable(
     if (!r.isActive || r.condition !== 'teaching_days_limit') continue;
     const minDays = r.minDaysPerWeek ?? 3;
     const maxDays = r.maxDaysPerWeek ?? 5;
+    const sev = r.importance === 'strict' ? 'error' : 'warning';
+    const isClasses = r.targetEntity === 'classes';
 
-    if (r.targetEntity === 'classes') {
-      const targetClasses =
-        r.classIds && r.classIds.length > 0
-          ? classes.filter((c) => r.classIds.includes(c.id))
-          : classes;
+    const targets: { id: string; name: string }[] = isClasses
+      ? (r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes)
+      : r.teacherIds && r.teacherIds.length > 0
+        ? teachers.filter((t) => r.teacherIds!.includes(t.id))
+        : teachers;
 
-      for (const cls of targetClasses) {
-        const distinctDays = new Set(
-          cards.filter((c) => c.classId === cls.id).map((c) => c.dayIndex)
-        );
-        if (distinctDays.size > 0 && (distinctDays.size < minDays || distinctDays.size > maxDays)) {
-          issues.push({
-            id: `rule_days_limit_c_${cls.id}`,
-            type: 'custom_constraint',
-            severity: r.importance === 'strict' ? 'error' : 'warning',
-            title: 'Ангийн 7 хоногт хичээллэх өдрийн тоо зөрчигдсөн',
-            description: `${cls.name} анги 7 хоногт ${distinctDays.size} өдөр хичээлтэй байна. (Зөвшөөрөгдөх: ${minDays} - ${maxDays} өдөр)`,
-            entityType: 'class',
-            entityId: cls.id,
-          });
-        }
-      }
-    } else {
-      // Teachers
-      const targetTeachers =
-        r.teacherIds && r.teacherIds.length > 0
-          ? teachers.filter((t) => r.teacherIds!.includes(t.id))
-          : teachers;
-
-      for (const t of targetTeachers) {
-        const distinctDays = new Set(
-          cards.filter((c) => c.teacherId === t.id).map((c) => c.dayIndex)
-        );
-        if (distinctDays.size > 0 && (distinctDays.size < minDays || distinctDays.size > maxDays)) {
-          issues.push({
-            id: `rule_days_limit_t_${t.id}`,
-            type: 'custom_constraint',
-            severity: r.importance === 'strict' ? 'error' : 'warning',
-            title: 'Багшийн 7 хоногт хичээл заах өдрийн тоо зөрчигдсөн',
-            description: `${t.name} багш 7 хоногт ${distinctDays.size} өдөр хичээл зааж байна. (Зөвшөөрөгдөх: ${minDays} - ${maxDays} өдөр)`,
-            entityType: 'teacher',
-            entityId: t.id,
-          });
-        }
+    for (const ent of targets) {
+      const distinctDays = new Set(
+        cards.filter((c) => (isClasses ? cardUsesClass(c, ent.id) : cardUsesTeacher(c, ent.id))).map((c) => c.dayIndex)
+      );
+      if (distinctDays.size > 0 && (distinctDays.size < minDays || distinctDays.size > maxDays)) {
+        issues.push({
+          id: `rule_days_limit_${isClasses ? 'c' : 't'}_${r.id}_${ent.id}`,
+          type: 'custom_constraint',
+          severity: sev,
+          title: isClasses
+            ? 'Ангийн 7 хоногт хичээллэх өдрийн тоо зөрчигдсөн'
+            : 'Багшийн 7 хоногт хичээл заах өдрийн тоо зөрчигдсөн',
+          description: `${ent.name} ${isClasses ? 'анги 7 хоногт' : 'багш 7 хоногт'} ${distinctDays.size} өдөр хичээлтэй байна. (Зөвшөөрөгдөх: ${minDays} - ${maxDays} өдөр)`,
+          entityType: isClasses ? 'class' : 'teacher',
+          entityId: ent.id,
+        });
       }
     }
   }

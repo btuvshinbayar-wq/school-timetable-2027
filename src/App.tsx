@@ -25,6 +25,7 @@ import {
   triggerAutoBackup,
   isAppInitialized,
   setAppInitialized,
+  normalizeProject,
   ProjectState,
 } from './utils/storage';
 import { getDefaultSchoolSettings, DEFAULT_BUILDINGS, DEFAULT_RELATIONSHIPS, DEFAULT_MANAGERS } from './utils/defaultData';
@@ -161,7 +162,8 @@ export default function App() {
       project.classes,
       project.classrooms,
       project.settings,
-      project.relationships
+      project.relationships,
+      project.lessons
     );
     setConflicts(list);
     saveProjectToStorage(project);
@@ -257,7 +259,9 @@ export default function App() {
       contractId: contract.id,
       subjectId: contract.subjectId,
       teacherId: contract.teacherId,
+      coTeacherIds: contract.coTeacherIds && contract.coTeacherIds.length > 0 ? [...contract.coTeacherIds] : undefined,
       classId: classId || contract.classId,
+      jointClassIds: contract.jointClassIds && contract.jointClassIds.length > 0 ? [...contract.jointClassIds] : undefined,
       subgroupName: contract.subgroupName,
       classroomId: contract.classroomId,
       shift: cls?.shift || 1,
@@ -676,7 +680,8 @@ export default function App() {
       <BackupsDialog
         isOpen={showBackups}
         onClose={() => setShowBackups(false)}
-        onRestoreProject={(restored) => {
+        onRestoreProject={(raw) => {
+          const restored = normalizeProject(raw);
           setProject(restored);
           saveProjectToStorage(restored);
           triggerAutoBackup(restored, true);

@@ -24,6 +24,7 @@ import {
   Check,
   HelpCircle,
 } from 'lucide-react';
+import { timeOffForShift } from '../utils/constraints';
 import { TimeOffMatrixDialog } from './TimeOffMatrixDialog';
 
 export type DataTab = 'subjects' | 'classes' | 'classrooms' | 'teachers';
@@ -126,7 +127,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
     if (copyClassCopyTimeOff && sourceClass.timeOff) {
       onUpdateClasses(
         classes.map((c) =>
-          copyClassTargetIds.includes(c.id) ? { ...c, timeOff: { ...sourceClass.timeOff } } : c
+          copyClassTargetIds.includes(c.id) ? { ...c, timeOff: timeOffForShift(sourceClass.timeOff, c.shift || 1) } : c
         )
       );
     }
@@ -180,7 +181,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
   ) => {
     if (type === 'classes') {
       onUpdateClasses(
-        classes.map((c) => (ids.includes(c.id) ? { ...c, timeOff: { ...matrix } } : c))
+        classes.map((c) => (ids.includes(c.id) ? { ...c, timeOff: timeOffForShift(matrix, c.shift || 1) } : c))
       );
     } else {
       onUpdateTeachers(
@@ -2253,6 +2254,7 @@ export const DataDialog: React.FC<DataDialogProps> = ({
           title={`${timeOffClass.name} анги - Цагийн менежмент`}
           subtitle="Анги хичээллэх боломжгүй цагуудыг улаанаар тэмдэглэнэ үү."
           initialTimeOff={timeOffClass.timeOff || {}}
+          shiftNumbers={[timeOffClass.shift || 1]}
           settings={settings}
           classes={classes}
           teachers={teachers}

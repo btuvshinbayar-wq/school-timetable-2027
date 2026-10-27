@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { SchoolSettings, ClassGroup, Teacher } from '../types/timetable';
+import { migrateTimeOff, timeOffKey } from '../utils/constraints';
 import { Check, X, AlertCircle, Copy, Users, GraduationCap, CheckSquare, Square } from 'lucide-react';
 
 interface TimeOffMatrixDialogProps {
@@ -17,6 +18,8 @@ interface TimeOffMatrixDialogProps {
     ids: string[],
     matrix: Record<string, 'allowed' | 'forbidden' | 'discouraged'>
   ) => void;
+  /** Засах боломжтой ээлжүүд (анги → зөвхөн өөрийн ээлж). Өгөхгүй бол сургуулийн бүх ээлж. */
+  shiftNumbers?: number[];
 }
 
 export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
@@ -30,10 +33,23 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
   classes = [],
   teachers = [],
   onCopyToOthers,
+  shiftNumbers,
 }) => {
-  const [matrix, setMatrix] = useState<Record<string, 'allowed' | 'forbidden' | 'discouraged'>>({
-    ...initialTimeOff,
-  });
+  const activeShiftConfigs = (settings.shifts || []).slice(0, Math.max(1, settings.shiftsCount || settings.shifts?.length || 1));
+  const editableShifts =
+    shiftNumbers && shiftNumbers.length > 0
+      ? shiftNumbers
+      : activeShiftConfigs.length > 0
+        ? activeShiftConfigs.map((s) => s.shiftNumber)
+        : [1];
+  const [matrix, setMatrix] = useState<Record<string, 'allowed' | 'forbidden' | 'discouraged'>>(() =>
+    migrateTimeOff(initialTimeOff, editableShifts)
+  );
+  const [shift, setShift] = useState<number>(editableShifts[0]);
+  const shiftConf = settings.shifts.find((s) => s.shiftNumber === shift) || settings.shifts[0];
+  const periodsCount = shiftConf?.periodsCount || settings.periodsPerDay || 6;
+  const shiftBells = shiftConf?.bells || settings.bells || [];
+  const k = (day: number, period: number) => timeOffKey(shift, day, period);
 
   // Copy modal state
   const [showCopyModal, setShowCopyModal] = useState(false);
@@ -44,7 +60,7 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
   if (!isOpen) return null;
 
   const toggleCell = (day: number, period: number) => {
-    const key = `${day}_${period}`;
+    const key = k(day, period);
     const current = matrix[key] || 'allowed';
     let next: 'allowed' | 'forbidden' | 'discouraged' = 'allowed';
 
@@ -61,15 +77,15 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
   const toggleDay = (day: number) => {
     // If all allowed, make forbidden, else allowed
     let anyAllowed = false;
-    for (let p = 0; p < settings.periodsPerDay; p++) {
-      if ((matrix[`${day}_${p}`] || 'allowed') === 'allowed') anyAllowed = true;
+    for (let p = 0; p < periodsCount; p++) {
+      if ((matrix[k(day, p)] || 'allowed') === 'allowed') anyAllowed = true;
     }
 
     const nextVal = anyAllowed ? 'forbidden' : 'allowed';
     setMatrix((prev) => {
       const updated = { ...prev };
-      for (let p = 0; p < settings.periodsPerDay; p++) {
-        updated[`${day}_${p}`] = nextVal;
+      for (let p = 0; p < periodsCount; p++) {
+        updated[k(day, p)] = nextVal;
       }
       return updated;
     });
@@ -78,24 +94,25 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
   const togglePeriod = (period: number) => {
     let anyAllowed = false;
     for (let d = 0; d < settings.daysPerWeek; d++) {
-      if ((matrix[`${d}_${period}`] || 'allowed') === 'allowed') anyAllowed = true;
+      if ((matrix[k(d, period)] || 'allowed') === 'allowed') anyAllowed = true;
     }
 
     const nextVal = anyAllowed ? 'forbidden' : 'allowed';
     setMatrix((prev) => {
       const updated = { ...prev };
       for (let d = 0; d < settings.daysPerWeek; d++) {
-        updated[`${d}_${period}`] = nextVal;
+        updated[k(d, period)] = nextVal;
       }
       return updated;
     });
   };
 
   const setAll = (status: 'allowed' | 'forbidden') => {
-    const updated: Record<string, 'allowed' | 'forbidden' | 'discouraged'> = {};
+    // Зөвхөн сонгосон ээлжийг өөрчилнө
+    const updated: Record<string, 'allowed' | 'forbidden' | 'discouraged'> = { ...matrix };
     for (let d = 0; d < settings.daysPerWeek; d++) {
-      for (let p = 0; p < settings.periodsPerDay; p++) {
-        updated[`${d}_${p}`] = status;
+      for (let p = 0; p < periodsCount; p++) {
+        updated[k(d, p)] = status;
       }
     }
     setMatrix(updated);
@@ -122,6 +139,29 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
         {/* Content */}
         <div className="p-4 bg-slate-50 flex-1">
           {subtitle && <p className="text-xs text-slate-600 mb-3">{subtitle}</p>}
+
+          {editableShifts.length > 1 && (
+            <div className="flex items-center gap-1 mb-3 text-xs">
+              <span className="font-semibold text-slate-700 mr-1">Ээлж:</span>
+              {editableShifts.map((sh) => {
+                const conf = settings.shifts.find((s) => s.shiftNumber === sh);
+                return (
+                  <button
+                    key={sh}
+                    type="button"
+                    onClick={() => setShift(sh)}
+                    className={`px-2.5 py-1 rounded border font-semibold cursor-pointer ${
+                      sh === shift
+                        ? 'bg-blue-600 text-white border-blue-700'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    {conf?.name || `${sh}-р ээлж`}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <div className="flex items-center justify-between mb-3 text-xs">
             <div className="flex items-center gap-3">
@@ -184,8 +224,8 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {Array.from({ length: settings.periodsPerDay }).map((_, p) => {
-                  const bell = settings.bells[p];
+                {Array.from({ length: periodsCount }).map((_, p) => {
+                  const bell = shiftBells[p];
                   return (
                     <tr key={p} className="border-b border-slate-200 hover:bg-slate-50/50">
                       <td
@@ -204,7 +244,7 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
                       </td>
 
                       {settings.dayNames.map((_, d) => {
-                        const status = matrix[`${d}_${p}`] || 'allowed';
+                        const status = matrix[k(d, p)] || 'allowed';
                         let bgClass = 'bg-emerald-500 hover:bg-emerald-600 text-white';
                         let icon = <Check className="w-4 h-4 mx-auto stroke-[2.5]" />;
 
