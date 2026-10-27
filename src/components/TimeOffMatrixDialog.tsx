@@ -123,7 +123,7 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-white rounded-lg shadow-2xl border border-slate-300 w-full max-w-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
         {/* Title bar - aSc Windows style */}
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white px-4 py-2.5 flex items-center justify-between select-none">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none">
           <div className="flex items-center gap-2">
             <div className="w-3.5 h-3.5 rounded-full bg-amber-400"></div>
             <span className="font-semibold text-sm">Чөлөөт цаг тохируулах (Time-off): {title}</span>
@@ -327,7 +327,7 @@ export const TimeOffMatrixDialog: React.FC<TimeOffMatrixDialogProps> = ({
       {showCopyModal && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-white rounded-lg shadow-2xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-gradient-to-r from-indigo-700 to-blue-800 text-white px-4 py-2.5 flex items-center justify-between select-none">
+            <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none">
               <div className="flex items-center gap-2">
                 <Copy className="w-4 h-4 text-indigo-200" />
                 <span className="font-bold text-sm">Цагийн тохиргоог хуулах</span>

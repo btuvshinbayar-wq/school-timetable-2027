@@ -191,7 +191,7 @@ export const RelationshipsDialog: React.FC<RelationshipsDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 select-none">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-6xl overflow-hidden flex flex-col h-[90vh]">
         {/* Title bar - Classic aSc Windows Header */}
-        <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-indigo-800 text-white px-4 py-2.5 flex items-center justify-between select-none shrink-0">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none shrink-0">
           <div className="flex items-center gap-2">
             <Network className="w-4 h-4 text-sky-200" />
             <span className="font-bold text-sm tracking-wide">
@@ -207,7 +207,7 @@ export const RelationshipsDialog: React.FC<RelationshipsDialogProps> = ({
         </div>
 
         {/* Sub-header status bar */}
-        <div className="bg-[#e9eff6] px-4 py-2 border-b border-slate-300 flex items-center justify-between text-xs shrink-0">
+        <div className="bg-[#f3f1ec] px-4 py-2 border-b border-slate-300 flex items-center justify-between text-xs shrink-0">
           <div className="flex items-center gap-2 text-slate-700">
             <span className="font-bold text-slate-900">Бүх хамаарлын дүрмүүд:</span>
             <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full font-mono text-[11px] font-bold">
@@ -237,7 +237,7 @@ export const RelationshipsDialog: React.FC<RelationshipsDialogProps> = ({
         </div>
 
         {/* Main Content Area: Split View (Rules List on Left, Direct Inspector on Right) */}
-        <div className="flex flex-1 overflow-hidden p-3 gap-3 bg-[#e8eef5]">
+        <div className="flex flex-1 overflow-hidden p-3 gap-3 bg-[#f3f1ec]">
           {/* LEFT: Rules Navigation List */}
           <div className="w-80 md:w-96 flex flex-col bg-white rounded border border-slate-300 overflow-hidden shadow-inner shrink-0">
             <div className="bg-slate-100 px-3 py-2 border-b border-slate-300 text-xs font-bold text-slate-700 flex items-center justify-between">
@@ -332,7 +332,7 @@ export const RelationshipsDialog: React.FC<RelationshipsDialogProps> = ({
             {activeRel ? (
               <div className="flex-1 flex flex-col overflow-hidden">
                 {/* Rule Title & State Header */}
-                <div className="bg-[#f4f7fb] p-3.5 border-b border-slate-200 flex items-center justify-between shrink-0">
+                <div className="bg-[#dce8e2] p-3.5 border-b border-slate-200 flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-2.5">
                     <div className="p-1.5 bg-white rounded border border-slate-300 shadow-2xs">
                       {getConditionIcon(activeRel.condition)}

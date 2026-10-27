@@ -19,7 +19,7 @@ export const PWAInstallButton: React.FC = () => {
     return (
       <button
         onClick={install}
-        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded shadow-sm transition-all"
+        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-white dialog-titlebar hover:from-blue-700 hover:to-indigo-700 rounded shadow-sm transition-all"
         title="Компьютер дээр десктоп програм байдлаар суулгах"
       >
         <Monitor className="w-3.5 h-3.5" />

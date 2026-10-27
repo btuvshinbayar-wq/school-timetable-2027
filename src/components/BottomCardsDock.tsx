@@ -13,6 +13,7 @@ interface BottomCardsDockProps {
   selectedTeacherId?: string;
   activeManagerId?: string;
   onCardDragStart: (contractId: string) => void;
+  onCardDragEnd?: () => void;
   onQuickPlaceCard: (contract: LessonContract) => void;
 }
 
@@ -27,6 +28,7 @@ export const BottomCardsDock: React.FC<BottomCardsDockProps> = ({
   selectedTeacherId,
   activeManagerId,
   onCardDragStart,
+  onCardDragEnd,
   onQuickPlaceCard,
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(true);
@@ -66,11 +68,11 @@ export const BottomCardsDock: React.FC<BottomCardsDockProps> = ({
   const totalRemaining = contractStats.reduce((sum, c) => sum + c.remaining, 0);
 
   return (
-    <div className="bg-[#dce4ee] border-t border-[#b0c0d2] shadow-xs flex flex-col select-none transition-all font-sans">
+    <div className="bg-[#ecebe5] border-t border-[#d6d1c6] shadow-xs flex flex-col select-none transition-all font-sans">
       {/* Top mini header bar */}
       <div
         onClick={() => setIsExpanded(!isExpanded)}
-        className="bg-[#d0dbe7] px-3 py-1 flex items-center justify-between text-xs cursor-pointer hover:bg-[#c8d4e2] border-b border-[#b5c5d6]"
+        className="bg-[#e6e2da] px-3 py-1 flex items-center justify-between text-xs cursor-pointer hover:bg-[#d6d1c6] border-b border-[#d6d1c6]"
       >
         <div className="flex items-center gap-2">
           <Layers className="w-3.5 h-3.5 text-blue-700" />
@@ -96,7 +98,7 @@ export const BottomCardsDock: React.FC<BottomCardsDockProps> = ({
 
       {/* Dock cards strip */}
       {isExpanded && (
-        <div className="p-2 overflow-x-auto flex items-center gap-2 max-h-24 min-h-[5.5rem] bg-[#e4ecf5] border-b border-[#c2d0df]">
+        <div className="p-2 overflow-x-auto flex items-center gap-2 max-h-24 min-h-[5.5rem] bg-[#dce8e2] border-b border-[#d6d1c6]">
           {filteredContracts.length === 0 ? (
             <div className="text-xs text-slate-500 italic px-4">
               Энэ шүүлтүүрт хамаарах хичээлийн карт байхгүй байна.
@@ -116,6 +118,7 @@ export const BottomCardsDock: React.FC<BottomCardsDockProps> = ({
                     e.dataTransfer.setData('text/plain', contract.id);
                     onCardDragStart(contract.id);
                   }}
+                  onDragEnd={() => onCardDragEnd?.()}
                   onClick={() => !isAllPlaced && onQuickPlaceCard(contract)}
                   className={`h-16 w-32 p-1.5 rounded border flex flex-col justify-between shrink-0 shadow-xs cursor-grab active:cursor-grabbing transition-transform hover:-translate-y-0.5 ${
                     isAllPlaced

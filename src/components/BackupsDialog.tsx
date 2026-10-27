@@ -97,7 +97,7 @@ export const BackupsDialog: React.FC<BackupsDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="bg-slate-800 text-white px-4 py-2.5 flex items-center justify-between select-none border-b border-slate-700">
+        <div className="dialog-titlebar px-4 py-2.5 flex items-center justify-between select-none border-b border-[#264b42]">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-emerald-400" />
             <span className="font-semibold text-sm">Авто-хуулбарын удирдлага (Autobackup)</span>

@@ -50,7 +50,7 @@ export const PrintPreviewDialog: React.FC<PrintPreviewDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 print:p-0 print:bg-white print:static">
       <div className="bg-white rounded-lg shadow-2xl border border-slate-300 w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh] print:max-h-none print:shadow-none print:border-none print:w-full">
         {/* Controls header (hidden on print) */}
-        <div className="bg-slate-800 text-white px-4 py-2.5 flex items-center justify-between print:hidden select-none">
+        <div className="dialog-titlebar px-4 py-2.5 flex items-center justify-between print:hidden select-none">
           <div className="flex items-center gap-3">
             <span className="font-semibold text-sm">Хэвлэх харагдац (Print Preview)</span>
             <div className="flex bg-slate-700 rounded p-0.5 text-xs">
