@@ -38,6 +38,7 @@ export interface Subject {
   name: string; // e.g. "Математик"
   shortName: string; // e.g. "Мат"
   color: string; // Hex color
+  /** Чөлөөт цаг. Түлхүүр: `${ээлж}_${өдөр}_${цаг}` (хуучин `${өдөр}_${цаг}` түлхүүр бүх ээлжид үйлчилнэ) */
   timeOff: Record<string, 'allowed' | 'forbidden' | 'discouraged'>;
   distributionRule?: 'ideal' | 'any' | 'consecutive_allowed';
   homework?: boolean;
@@ -207,6 +208,7 @@ export interface ConflictIssue {
     | 'gap_excess'
     | 'building_clash'
     | 'shift_mismatch'
+    | 'unplaced'
     | 'custom_constraint';
   severity: 'error' | 'warning';
   title: string;

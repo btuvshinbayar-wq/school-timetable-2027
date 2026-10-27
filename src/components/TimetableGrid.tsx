@@ -12,6 +12,7 @@ import {
   ManagerProfile,
 } from '../types/timetable';
 import { Lock, Unlock, Trash2 } from 'lucide-react';
+import { getTimeOffStatus } from '../utils/constraints';
 
 interface TimetableGridProps {
   viewMode: 'whole_classes' | 'whole_teachers' | 'single_class' | 'single_teacher' | 'single_room';
@@ -355,7 +356,8 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                             const isDayEnd = p === periodsCount - 1;
 
                             // Check time off (forbidden/unavailable slot)
-                            const isForbidden = entity.timeOff && entity.timeOff[`${d}_${p}`] === 'forbidden';
+                            const rowShift = isWholeClasses ? entity.shift || 1 : activeShift || 1;
+                            const isForbidden = getTimeOffStatus(entity.timeOff, rowShift, d, p) === 'forbidden';
 
                             // Find all cards in this slot (supporting parallel subgroups!)
                             const cellCards = filteredCards.filter((c) => {
