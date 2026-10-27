@@ -29,7 +29,7 @@ import {
   ProjectState,
 } from './utils/storage';
 import { getDefaultSchoolSettings, DEFAULT_BUILDINGS, DEFAULT_RELATIONSHIPS, DEFAULT_MANAGERS } from './utils/defaultData';
-import { verifyTimetable, generateTimetable } from './utils/generator';
+import { verifyTimetable } from './utils/generator';
 
 // Components
 import { DesktopWindowFrame } from './components/DesktopWindowFrame';
@@ -174,25 +174,8 @@ export default function App() {
     }
   }, [project]);
 
-  // Initial auto-generation if scheduled cards are empty
-  useEffect(() => {
-    if (project.scheduledCards.length === 0) {
-      generateTimetable(
-        project.subjects,
-        project.teachers,
-        project.classes,
-        project.classrooms,
-        project.lessons,
-        project.relationships,
-        project.settings
-      ).then((result) => {
-        setProject((prev) => ({
-          ...prev,
-          scheduledCards: result.scheduledCards,
-        }));
-      });
-    }
-  }, []);
+  // Анх ачаалахад хуваарийг автоматаар бодохгүй: том сургуульд бодолт удаан тул
+  // хэрэглэгч "Хуваарь бодох" цонхоор (тусдаа урсгалд) өөрөө эхлүүлнэ.
 
   const handleOpenLessonsForSubject = (subjectId: string) => {
     setLessonsFilterSubjectId(subjectId);
@@ -504,12 +487,25 @@ export default function App() {
 
         <div className="flex items-center gap-2">
           {conflicts.length > 0 ? (
-            <button
-              onClick={() => setShowVerification(true)}
-              className="flex items-center gap-1 font-bold text-rose-700 bg-rose-100/90 border border-rose-300 px-2 py-0.5 rounded-xs hover:bg-rose-200 transition cursor-pointer"
-            >
-              <span>⚠️ {conflicts.length} зөрчил илэрсэн</span>
-            </button>
+            (() => {
+              const errorCount = conflicts.filter((c) => c.severity === 'error').length;
+              const warnCount = conflicts.length - errorCount;
+              return (
+                <button
+                  onClick={() => setShowVerification(true)}
+                  className={`flex items-center gap-1 font-bold px-2 py-0.5 rounded-xs transition cursor-pointer border ${
+                    errorCount > 0
+                      ? 'text-rose-700 bg-rose-100/90 border-rose-300 hover:bg-rose-200'
+                      : 'text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-200'
+                  }`}
+                  title="Шалгалтын жагсаалтыг нээх"
+                >
+                  <span>
+                    {errorCount > 0 ? `⚠️ ${errorCount} алдаа` : '✓ Хатуу зөрчилгүй'} · {warnCount} сануулга
+                  </span>
+                </button>
+              );
+            })()
           ) : (
             <div className="asc-status-panel text-emerald-700 font-semibold flex items-center gap-1">
               <span>✓ Хуваарь зөрчилгүй</span>

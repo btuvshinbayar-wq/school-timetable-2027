@@ -126,10 +126,18 @@ async function main() {
   console.log('\nВ. Ээлжтэй чөлөөт цаг');
   {
     // Зөвхөн 2-р ээлжийн Даваа 1-р цаг хаалттай
+    // Ангиудад зөвхөн Даваагийн 1, 2-р цагийг үлдээж, багшийн хаалттай цаг аль ээлжид үйлчлэхийг шалгана
+    const onlyMonday = (shift: number) => {
+      const off: Record<string, any> = {};
+      for (let d = 0; d < 5; d++) for (let p = 0; p < 6; p++) if (!(d === 0 && p <= 1)) off[`${shift}_${d}_${p}`] = 'forbidden';
+      return off;
+    };
+    const X = { ...C('X', 1), timeOff: onlyMonday(1) };
+    const Q = { ...C('Q', 2), timeOff: onlyMonday(2) };
     const r = await gen(
-      [L('m1', { teacherId: 'A', classId: 'X' }), L('m2', { teacherId: 'A', classId: 'Q' })],
-      [T('A', { '2_0_0': 'forbidden' })],
-      [C('X', 1), C('Q', 2)]
+      [L('m1', { teacherId: 'A', classId: 'X' }), L('m2', { teacherId: 'A', classId: 'Q' }), L('x2', { teacherId: 'B', classId: 'X' })],
+      [T('A', { '2_0_0': 'forbidden' }), T('B', { '1_0_0': 'forbidden' })],
+      [X, Q]
     );
     const [m1] = byContract(r.scheduledCards, 'm1');
     const [m2] = byContract(r.scheduledCards, 'm2');
@@ -233,6 +241,19 @@ async function main() {
     check('бие даасан аудитаар хатуу зөрчил 0', Object.values(audit).every((v) => v === 0));
     const errs = r.conflicts.filter((c) => c.severity === 'error');
     check('verify-ийн алдаа 0', errs.length === 0, errs.slice(0, 3).map((e) => e.description).join(' | '));
+  }
+
+  console.log('\nИ. "Зогсоох" дарвал одоог хүртэлх хамгийн сайн хуваарийг шууд буцаана');
+  {
+    const { lessons, teachers, classes, rooms } = buildSyntheticSchool();
+    const t0 = Date.now();
+    const r = await generateTimetable(subjects, teachers, classes, rooms, lessons, [], settings, [], undefined, {
+      timeLimitMs: 60000,
+      shouldStop: () => Date.now() - t0 > 1500,
+    });
+    const ms = Date.now() - t0;
+    check('3 сек дотор буцсан', ms < 3000, `${ms} мс`);
+    check('буцсан хуваарьт хатуу зөрчилгүй', Object.values(auditHardConstraints(r.scheduledCards, lessons, classes, teachers, rooms, settings)).every((v) => v === 0));
   }
 
   console.log(`\n${passed} амжилттай, ${failed} амжилтгүй`);

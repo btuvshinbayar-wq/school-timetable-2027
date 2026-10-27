@@ -148,8 +148,18 @@ export function classesOf(card: Pick<CardLike, 'classId' | 'jointClassIds'>): st
 }
 
 /** Дэд бүлгийн хуваалт (gender / division / custom). Ангид бүртгэлгүй нэр бол нэр өөрөө хуваалт болно. */
+const classIndexCache = new WeakMap<ClassGroup[], Map<string, ClassGroup>>();
+function classIndex(classes: ClassGroup[]): Map<string, ClassGroup> {
+  let m = classIndexCache.get(classes);
+  if (!m) {
+    m = new Map(classes.map((c) => [c.id, c]));
+    classIndexCache.set(classes, m);
+  }
+  return m;
+}
+
 export function subgroupCategory(classes: ClassGroup[], classId: string, name: string): string {
-  const cls = classes.find((c) => c.id === classId);
+  const cls = classIndex(classes).get(classId);
   const sg = cls?.subgroups?.find((s) => s.name.trim() === name.trim());
   if (!sg) return `__custom:${name.trim()}`;
   return sg.category || 'custom';
@@ -416,4 +426,73 @@ export function timeOffForShift(map: TimeOffMap, targetShift: number): Record<st
     return Object.fromEntries(entries.map(([k, v]) => [`${targetShift}_${k.split('_').slice(1).join('_')}`, v]));
   }
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Багшийн өдрийн бодит цагийн дүр зураг (ээлж давхцах үед ч зөв)
+// ---------------------------------------------------------------------------
+
+export interface DayItem {
+  start: number;
+  end: number;
+  shift: number;
+  building?: string;
+}
+
+export interface DayProfile {
+  /** Давхардалгүй заасан цаг */
+  count: number;
+  /** Нийт цонх (сул цаг) */
+  gaps: number;
+  /** Хамгийн урт завсаргүй дараалал */
+  maxRun: number;
+  /** Ээлж солигдох бүрийн хоорондын сул цаг */
+  crossShiftGaps: number[];
+  /** Байр солихдоо завсар хүрэлцээгүй тоо */
+  buildingHops: number;
+}
+
+/** Хоёр хичээлийн хоорондох сул цагийн тоо (5–15 минутын завсарлага = 0) */
+export function idlePeriodsBetween(prevEnd: number, nextStart: number): number {
+  const gap = nextStart - prevEnd;
+  return gap <= 20 ? 0 : Math.max(1, Math.round((gap - 15) / 45));
+}
+
+export function dayProfile(items: DayItem[], buildingBuffer = 1): DayProfile {
+  const sorted = [...items].sort((a, b) => a.start - b.start);
+  const uniq: DayItem[] = [];
+  for (const it of sorted) {
+    const last = uniq[uniq.length - 1];
+    if (last && last.start === it.start) continue; // А/Б эсвэл дэд бүлэг — нэг цаг
+    uniq.push(it);
+  }
+  let gaps = 0;
+  let run = uniq.length > 0 ? 1 : 0;
+  let maxRunV = run;
+  const crossShiftGaps: number[] = [];
+  let buildingHops = 0;
+  for (let i = 1; i < uniq.length; i++) {
+    const idle = idlePeriodsBetween(uniq[i - 1].end, uniq[i].start);
+    gaps += idle;
+    run = idle === 0 ? run + 1 : 1;
+    if (run > maxRunV) maxRunV = run;
+    if (uniq[i].shift !== uniq[i - 1].shift) crossShiftGaps.push(idle);
+    const b1 = uniq[i - 1].building;
+    const b2 = uniq[i].building;
+    if (b1 && b2 && b1 !== b2 && idle < buildingBuffer) buildingHops++;
+  }
+  return { count: uniq.length, gaps, maxRun: maxRunV, crossShiftGaps, buildingHops };
+}
+
+/** Картын байр: танхимын байр, үгүй бол ангийн байр */
+export function cardBuilding(
+  card: Pick<CardLike, 'classroomId' | 'classId'>,
+  rooms: Map<string, Classroom>,
+  classes: Map<string, ClassGroup>
+): string | undefined {
+  if (card.classroomId) {
+    const r = rooms.get(card.classroomId);
+    if (r?.buildingId) return r.buildingId;
+  }
+  return classes.get(card.classId)?.buildingId;
 }

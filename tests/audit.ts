@@ -76,3 +76,69 @@ export function auditHardConstraints(
   }
   return { teacherClash, classClash, roomOverCapacity, teacherTimeOff, brokenDoubles };
 }
+
+/** Чанарын үзүүлэлт (зөөлөн): бага байх тусам сайн */
+export function auditQuality(
+  cards: ScheduledCard[],
+  lessons: LessonContract[],
+  classes: ClassGroup[],
+  teachers: Teacher[],
+  rooms: Classroom[],
+  settings: SchoolSettings
+) {
+  const lessonById = new Map(lessons.map((l) => [l.id, l]));
+  const days = settings.daysPerWeek;
+  const bell = (c: ScheduledCard) => settings.shifts.find((s) => s.shiftNumber === c.shift)!.bells[c.periodIndex];
+  const buildingOf = (c: ScheduledCard) =>
+    rooms.find((r) => r.id === c.classroomId)?.buildingId || classes.find((x) => x.id === c.classId)?.buildingId || '';
+
+  let classGaps = 0;
+  let sameSubjectSameDay = 0;
+  let dayImbalance = 0;
+  for (const cls of classes) {
+    const mine = cards.filter((c) => c.classId === cls.id || lessonById.get(c.contractId)?.jointClassIds?.includes(cls.id));
+    const perDay: number[] = [];
+    for (let d = 0; d < days; d++) {
+      const dc = mine.filter((c) => c.dayIndex === d);
+      const ps = [...new Set(dc.map((c) => c.periodIndex))].sort((a, b) => a - b);
+      perDay.push(ps.length);
+      if (ps.length > 1) classGaps += ps[ps.length - 1] - ps[0] + 1 - ps.length;
+      const units = new Map<string, number>();
+      for (const c of dc) {
+        if (c.isDoublePart === 'second' || c.subgroupName === '2-р дэд бүлэг') continue;
+        units.set(c.subjectId, (units.get(c.subjectId) || 0) + 1);
+      }
+      for (const n of units.values()) if (n > 1) sameSubjectSameDay += n - 1;
+    }
+    dayImbalance += Math.max(...perDay) - Math.min(...perDay);
+  }
+
+  let teacherGaps = 0;
+  let buildingHops = 0;
+  for (const t of teachers) {
+    const mine = cards.filter((c) => c.teacherId === t.id || lessonById.get(c.contractId)?.coTeacherIds?.includes(t.id));
+    for (let d = 0; d < days; d++) {
+      const dc = mine
+        .filter((c) => c.dayIndex === d)
+        .map((c) => {
+          const b = bell(c);
+          const [sh, sm] = b.startTime.split(':').map(Number);
+          const [eh, em] = b.endTime.split(':').map(Number);
+          return { s: sh * 60 + sm, e: eh * 60 + em, b: buildingOf(c) };
+        })
+        .sort((a, b) => a.s - b.s);
+      for (let i = 1; i < dc.length; i++) {
+        const gapMin = dc[i].s - dc[i - 1].e;
+        if (gapMin >= 30) teacherGaps += Math.round(gapMin / 45);
+        if (gapMin < 30 && dc[i].b !== dc[i - 1].b) buildingHops++;
+      }
+    }
+  }
+  return {
+    classGaps,
+    teacherGaps,
+    sameSubjectSameDay,
+    buildingHopsWithoutBreak: buildingHops,
+    avgClassDayImbalance: +(dayImbalance / classes.length).toFixed(2),
+  };
+}
