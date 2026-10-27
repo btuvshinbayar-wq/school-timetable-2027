@@ -1,0 +1,8 @@
+{
+  "name": "School timetable 2027",
+  "description": "Монголын ерөнхий боловсролын сургуулийн 2-3 ээлж, олон байр, А/Б 7 хоногтой хичээлийн хуваарь зохиох, бодох систем",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
+
