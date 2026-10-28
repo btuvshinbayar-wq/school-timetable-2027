@@ -1,5 +1,4 @@
 node_modules/
-build/
 dist/
 coverage/
 .DS_Store
@@ -9,3 +8,9 @@ coverage/
 
 # Хөгжүүлэлтийн серверийн автомат хуулбарууд
 backups/backup_*.json
+
+# Лицензийн хувийн түлхүүр, олгосон лицензийн бүртгэл — ХЭЗЭЭ Ч GIT-Д ОРУУЛАХГҮЙ
+license-keys/
+# Electron бүтээлт
+dist-desktop/
+release/

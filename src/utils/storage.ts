@@ -22,6 +22,7 @@ import {
 } from './defaultData';
 import { ManagerProfile, SubstitutionDay } from '../types/timetable';
 import { hasLegacyTimeOff, migrateTimeOff } from './constraints';
+import { desktop } from '../desktop';
 
 /**
  * Хуучин хувилбарын өгөгдлийг шинэ бүтэц рүү шилжүүлнэ:
@@ -142,6 +143,11 @@ export function exportProjectToFile(
   customFileName?: string
 ) {
   const dataStr = JSON.stringify(state, null, 2);
+  if (desktop) {
+    const base = customFileName || state.projectName || state.settings.schoolName || 'School_Timetable_2027';
+    desktop.app.saveFile(`${base.replace(/[\\/:*?"<>|\s]+/g, '_')}.json`, dataStr);
+    return;
+  }
   const blob = new Blob([dataStr], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -263,6 +269,16 @@ export function triggerAutoBackup(state: ProjectState, immediate = false): void 
   }
 
   const performBackup = async () => {
+    // Windows десктоп: Documents\School Timetable 2027\backups
+    if (desktop) {
+      try {
+        const r = await desktop.backup.save(JSON.stringify(state));
+        if (r.success && r.displayTime && r.filename) announceBackup(r.displayTime, r.filename);
+      } catch {
+        /* */
+      }
+      return;
+    }
     let serverOk = false;
     try {
       const res = await fetch('/api/backup', {
@@ -296,6 +312,13 @@ export function triggerAutoBackup(state: ProjectState, immediate = false): void 
 }
 
 export async function listServerBackups(): Promise<BackupItem[]> {
+  if (desktop) {
+    try {
+      return await desktop.backup.list();
+    } catch {
+      return [];
+    }
+  }
   let server: BackupItem[] = [];
   try {
     const res = await fetch('/api/backup/list');
@@ -312,6 +335,7 @@ export async function listServerBackups(): Promise<BackupItem[]> {
 
 export async function loadServerBackup(filename: string): Promise<ProjectState> {
   if (filename.startsWith('local:')) return loadLocalBackup(filename);
+  if (desktop) return normalizeProject(await desktop.backup.load(filename));
   const res = await fetch('/api/backup/load', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -1,3 +1,4 @@
+import { isDesktop } from '../desktop';
 import React, { useState } from 'react';
 import { SchoolSettings, ShiftConfig, BellPeriod, Building } from '../types/timetable';
 import { calculateShiftBells } from '../utils/defaultData';
@@ -697,7 +698,7 @@ export const SchoolSettingsDialog: React.FC<SchoolSettingsDialogProps> = ({
                   className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold shadow-md flex items-center gap-2 cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>Баталгаажуулж JSON-р хадгалах</span>
+                  <span>{isDesktop ? 'Баталгаажуулж хадгалах' : 'Баталгаажуулж JSON-р хадгалах'}</span>
                 </button>
               </div>
             </form>

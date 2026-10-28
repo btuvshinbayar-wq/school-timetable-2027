@@ -134,22 +134,26 @@ function autobackupPlugin(): Plugin {
   };
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  // `vite build --mode desktop` — Windows десктоп (Electron) хувилбар: харьцангуй зам, PWA-гүй
+  const desktop = mode === 'desktop';
   return {
+    base: desktop ? './' : '/',
+    build: desktop ? { outDir: 'dist-desktop', emptyOutDir: true, chunkSizeWarningLimit: 2000 } : undefined,
     plugins: [
       react(),
       tailwindcss(),
       autobackupPlugin(),
-      VitePWA({
+      !desktop && VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'icon.svg'],
         manifest: {
           id: '/',
-          name: 'School Timetable (aSc Style)',
-          short_name: 'Timetable',
+          name: 'School Timetable 2027',
+          short_name: 'Timetable 2027',
           description: 'aSc Timetables загварын сургуулийн хичээлийн хуваарь зохиогч',
-          theme_color: '#2563eb',
-          background_color: '#f8fafc',
+          theme_color: '#2f5d52',
+          background_color: '#ecebe5',
           display: 'standalone',
           start_url: '/',
           scope: '/',
