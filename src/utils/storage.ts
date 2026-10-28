@@ -20,7 +20,7 @@ import {
   DEFAULT_MANAGERS,
   getDefaultSchoolSettings,
 } from './defaultData';
-import { ManagerProfile } from '../types/timetable';
+import { ManagerProfile, SubstitutionDay } from '../types/timetable';
 import { hasLegacyTimeOff, migrateTimeOff } from './constraints';
 
 /**
@@ -60,6 +60,8 @@ export interface ProjectState {
   scheduledCards: ScheduledCard[];
   relationships: CardRelationship[];
   managers?: ManagerProfile[];
+  /** Огноо бүрийн орлон заалтын төлөвлөгөө */
+  substitutions?: SubstitutionDay[];
   lastModified: string;
 }
 

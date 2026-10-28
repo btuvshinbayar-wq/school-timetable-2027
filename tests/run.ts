@@ -17,6 +17,8 @@ import { auditHardConstraints } from './audit';
 import { applyMove, evaluateMove } from '../src/utils/manualEdit';
 import { ensureIntegrity } from '../src/utils/integrity';
 import { mergeExcelImport } from '../src/utils/excelIO';
+import { autoPlan, optionsForCard, validatePlan, baseDayCards, dayIndexOfDate, weekCycleOfDate, affectedCards } from '../src/utils/substitution';
+import { buildStressSchool } from './stressSchool';
 
 const settings = D.getDefaultSchoolSettings();
 const subjects = D.DEFAULT_SUBJECTS;
@@ -328,6 +330,122 @@ async function main() {
     check('одоо байгаа гэрээ шинэчлэгдсэн (ID хэвээр)', merged.lessons.find((l) => l.id === 'old')?.totalPeriods === 5);
     check('шинэ гэрээ нэмэгдсэн', merged.lessons.length === 2);
     check('олдохгүй анги мэдэгдэгдсэн', merged.messages.some((m) => m.includes('10В')));
+  }
+
+  console.log('\nН. Орлон заалт');
+  {
+    const card = (id: string, o: Partial<ScheduledCard>): ScheduledCard => ({
+      id, contractId: id, subjectId: 'sub-4', teacherId: 'A', classId: 'X', shift: 1, dayIndex: 0, periodIndex: 0, weekCycle: 'all', ...o,
+    });
+    const teachersN = ['A', 'B', 'C', 'D', 'E', 'F'].map((t) => T(t));
+    const lessonsN = [
+      L('eng', { subjectId: 'sub-4', teacherId: 'A', classId: 'X' }),
+      L('eng2', { subjectId: 'sub-4', teacherId: 'E', classId: 'Y' }),
+      L('math', { subjectId: 'sub-1', teacherId: 'C', classId: 'X' }),
+      L('ph', { subjectId: 'sub-5', teacherId: 'D', classId: 'X' }),
+      L('art', { subjectId: 'sub-12', teacherId: 'F', classId: 'Y' }),
+    ];
+    const mk = (cards: ScheduledCard[], absences: any[]) => {
+      const ctxN = { settings, subjects, teachers: teachersN, classes: [C('X'), C('Y')], classrooms: [], lessons: lessonsN, cards };
+      const day: any = { date: '2026-10-26', dayIndex: 0, absences, actions: [], updatedAt: '' };
+      return { ctxN, day, dayCards: baseDayCards(ctxN, 0, undefined) };
+    };
+
+    // 1. Дэд бүлэг нийлүүлэх нь орлох багшаас түрүүлнэ
+    {
+      const cards = [
+        card('g1', { teacherId: 'A', subgroupName: '1-р дэд бүлэг', periodIndex: 2 }),
+        card('g2', { teacherId: 'B', subgroupName: '2-р дэд бүлэг', periodIndex: 2 }),
+        card('m0', { subjectId: 'sub-1', teacherId: 'C', periodIndex: 0 }),
+        card('p5', { subjectId: 'sub-5', teacherId: 'D', periodIndex: 5 }),
+        card('y2', { subjectId: 'sub-12', teacherId: 'F', classId: 'Y', periodIndex: 0 }),
+      ];
+      const { ctxN, day, dayCards } = mk(cards, [{ id: 'a', teacherId: 'A', reason: 'sick', allDay: true }]);
+      const opts = optionsForCard(ctxN, day, dayCards, [], 'g1');
+      check('дэд бүлэг нийлүүлэх эхэнд', opts[0]?.kind === 'merge_subgroups' && opts[0].hostCardId === 'g2', opts[0]?.label);
+      check('ижил хичээлийн сул багш (E) санал болгосон', opts.some((o) => o.kind === 'substitute' && o.teacherId === 'E'));
+      const eIdx = opts.findIndex((o) => o.kind === 'substitute' && o.teacherId === 'E');
+      const fIdx = opts.findIndex((o) => o.kind === 'substitute' && o.teacherId === 'F');
+      check('ижил хичээлийн багш өөр хичээлийнхээс түрүүнд', eIdx >= 0 && (fIdx < 0 || eIdx < fIdx));
+      day.actions = autoPlan(ctxN, day);
+      const v = validatePlan(ctxN, day);
+      check('нийлүүлсний дараа B бүх ангид, зөрчилгүй', v.issues.length === 0 && v.effective.some((c) => c.id === 'g2' && c.subgroupName?.includes('+')));
+    }
+
+    // 2. Хагас өдрийн чөлөө → ангийн өөр цагтай солих (багш өөрөө заана)
+    {
+      const cards = [
+        card('e0', { teacherId: 'A', periodIndex: 0 }),
+        card('m3', { subjectId: 'sub-1', teacherId: 'C', periodIndex: 3 }),
+        card('p1', { subjectId: 'sub-5', teacherId: 'D', periodIndex: 1 }),
+        card('p2', { subjectId: 'sub-5', teacherId: 'D', periodIndex: 2, classId: 'Y' }),
+        card('e_busy', { teacherId: 'E', classId: 'Y', periodIndex: 0 }),
+        card('f_busy', { subjectId: 'sub-12', teacherId: 'F', classId: 'Y', periodIndex: 3 }),
+      ];
+      // B бусад цагт завгүй байлгах
+      const extra = [0, 1, 2, 3, 4, 5].map((p) => card(`b${p}`, { subjectId: 'sub-12', teacherId: 'B', classId: `Z${p}`, periodIndex: p }));
+      const { ctxN, day, dayCards } = mk([...cards, ...extra], [{ id: 'a', teacherId: 'A', reason: 'leave', allDay: false, slots: ['1_0', '1_1'] }]);
+      ctxN.classes.push(...[0, 1, 2, 3, 4, 5].map((p) => C(`Z${p}`)));
+      const opts = optionsForCard(ctxN, day, baseDayCards(ctxN, 0, undefined), [], 'e0');
+      check('хагас өдрийн чөлөөнд солих эхэнд', opts[0]?.kind === 'swap' && opts[0].toPeriod === 3, opts[0]?.label);
+      day.actions = autoPlan(ctxN, day);
+      const v = validatePlan(ctxN, day);
+      check('солисны дараа зөрчилгүй', v.issues.length === 0, v.issues.map((i) => i.message).join(';'));
+      void dayCards;
+    }
+
+    // 3. Захын хичээл → анги эрт тарна (сул багш байхгүй үед)
+    {
+      const cards = [
+        card('m0', { subjectId: 'sub-1', teacherId: 'C', periodIndex: 0 }),
+        card('p1', { subjectId: 'sub-5', teacherId: 'D', periodIndex: 1 }),
+        card('e2', { teacherId: 'A', periodIndex: 2 }),
+      ];
+      const busy = ['B', 'E', 'F'].map((t, i) => card(`x${i}`, { subjectId: 'sub-12', teacherId: t, classId: `Z${i}`, periodIndex: 2 }));
+      const { ctxN, day } = mk([...cards, ...busy], [{ id: 'a', teacherId: 'A', reason: 'sick', allDay: true }]);
+      ctxN.classes.push(C('Z0'), C('Z1'), C('Z2'));
+      day.actions = autoPlan(ctxN, day);
+      check('сүүлийн цаг → анги эрт тарна', day.actions[0]?.kind === 'cancel', day.actions[0]?.kind);
+    }
+
+    // 4. Хамтран заах багш чөлөөтэй → үндсэн багш дангаараа
+    {
+      const cards = [card('co', { teacherId: 'A', coTeacherIds: ['B'], periodIndex: 1 })];
+      const { ctxN, day, dayCards } = mk(cards, [{ id: 'b', teacherId: 'B', reason: 'training', allDay: true }]);
+      const opts = optionsForCard(ctxN, day, dayCards, [], 'co');
+      check('хамтран заагч байхгүй → дангаараа', opts[0]?.kind === 'drop_coteacher');
+    }
+
+    // 5. Огноо
+    check('2026-10-26 = Даваа', dayIndexOfDate('2026-10-26', 5) === 0 && dayIndexOfDate('2026-10-31', 5) === null);
+    const abS = { ...settings, enableWeekAB: true, weekAReferenceDate: '2026-09-07' };
+    check('А/Б 7 хоног лавлах огноогоор', weekCycleOfDate('2026-09-09', abS) === 'week_a' && weekCycleOfDate('2026-09-16', abS) === 'week_b');
+
+    // 6. Том сургууль: 8 багш өвчтэй, нэг нь хагас өдөр — бүгд шийдэгдэж, хатуу зөрчилгүй
+    {
+      const s = buildStressSchool();
+      const solved = await generateTimetable(s.subjects, s.teachers, s.classes, s.rooms, s.lessons, s.relationships, s.settings, [], undefined, { timeLimitMs: 6000 });
+      const ctxS = { settings: s.settings, subjects: s.subjects, teachers: s.teachers, classes: s.classes, classrooms: s.rooms, lessons: s.lessons, cards: solved.scheduledCards };
+      const names = ['Мат-3', 'Анг-60', 'Анг-63', 'Физ-70', 'Мэд-110', 'БТ-120', 'МХ-30', 'Анги даасан 2Б'];
+      const absences: any[] = names
+        .map((n, i) => ({ id: `a${i}`, teacherId: s.teachers.find((t) => t.name === n)?.id, reason: 'sick', allDay: i !== 0 }))
+        .filter((a) => a.teacherId);
+      absences[0].slots = ['1_0', '1_1', '1_2', '2_0', '2_1', '2_2'];
+      const date = '2026-10-28';
+      const dayS: any = { date, dayIndex: dayIndexOfDate(date, 5), weekCycle: weekCycleOfDate(date, s.settings), absences, actions: [], updatedAt: '' };
+      const t0 = Date.now();
+      dayS.actions = autoPlan(ctxS, dayS);
+      const ms = Date.now() - t0;
+      const v = validatePlan(ctxS, dayS);
+      const aff = affectedCards(baseDayCards(ctxS, dayS.dayIndex, dayS.weekCycle), absences);
+      const kinds: Record<string, number> = {};
+      for (const a of dayS.actions) kinds[a.kind] = (kinds[a.kind] || 0) + 1;
+      console.log(`    ${aff.length} хичээл, ${ms} мс, ${JSON.stringify(kinds)}`);
+      check('бүх хичээл шийдэгдсэн', v.unresolved.length === 0 && dayS.actions.length === aff.length);
+      const audit = auditHardConstraints(v.effective, s.lessons, s.classes, s.teachers, s.rooms, s.settings);
+      check('бие даасан аудитаар хатуу зөрчилгүй', v.issues.length === 0 && Object.values(audit).every((x) => x === 0), JSON.stringify(audit) + v.issues.slice(0, 2).map((i) => i.message).join(';'));
+      check('3 секундээс хурдан', ms < 3000, `${ms}`);
+    }
   }
 
   console.log(`\n${passed} амжилттай, ${failed} амжилтгүй`);

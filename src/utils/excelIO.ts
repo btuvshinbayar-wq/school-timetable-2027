@@ -445,3 +445,30 @@ export function mergeExcelImport(
   if (raw.sheets.length === 0) messages.push('❌ Танигдах хуудас олдсонгүй. Загвар файлыг татаж ашиглана уу.');
   return { subjects, teachers, classrooms, classes, lessons, messages };
 }
+
+/** Орлон заалтын тайлан: товч (багшаар) ба дэлгэрэнгүй (зохицуулалт бүр) */
+export function exportSubstitutionReport(
+  summary: { name: string; absentPeriods: number; absentDays: number; substitutedPeriods: number; mergedHosted: number; ownMoved: number }[],
+  detail: { date: string; time: string; className: string; subject: string; absentTeacher: string; action: string; byTeacher: string }[],
+  from: string,
+  to: string,
+  schoolName: string
+) {
+  const wb = XLSX.utils.book_new();
+  const head = [[`${schoolName} — орлон заалтын тайлан`], [`${from} – ${to}`], []];
+  const sum = XLSX.utils.aoa_to_sheet([
+    ...head,
+    ['Багш', 'Чөлөөтэй цаг', 'Чөлөөтэй өдөр', 'Орлон заасан цаг', 'Нийлүүлж заасан цаг', 'Өөрөө нөхсөн цаг'],
+    ...summary.map((r) => [r.name, r.absentPeriods, r.absentDays, r.substitutedPeriods, r.mergedHosted, r.ownMoved]),
+  ]);
+  sum['!cols'] = [{ wch: 26 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 18 }];
+  XLSX.utils.book_append_sheet(wb, sum, 'Багшаар');
+  const det = XLSX.utils.aoa_to_sheet([
+    ...head,
+    ['Огноо', 'Цаг', 'Анги', 'Хичээл', 'Чөлөөтэй багш', 'Шийдэл', 'Заасан багш'],
+    ...detail.map((r) => [r.date, r.time, r.className, r.subject, r.absentTeacher, r.action, r.byTeacher]),
+  ]);
+  det['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 22 }, { wch: 46 }, { wch: 22 }];
+  XLSX.utils.book_append_sheet(wb, det, 'Дэлгэрэнгүй');
+  XLSX.writeFile(wb, `Orlon_zaalt_${from}_${to}.xlsx`);
+}
