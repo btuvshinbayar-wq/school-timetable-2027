@@ -9,6 +9,7 @@ import {
   Sliders,
   School,
   Gavel,
+  UserX,
   FileSpreadsheet,
   Printer,
   Save,
@@ -38,6 +39,7 @@ interface SingleHeaderToolbarProps {
   onOpenSchoolSettings: () => void;
   onOpenGenerator: () => void;
   onOpenVerification: () => void;
+  onOpenSubstitution?: () => void;
   onOpenExcel: () => void;
   onOpenPrintPreview: () => void;
   onNewProject: () => void;
@@ -86,6 +88,7 @@ export const SingleHeaderToolbar: React.FC<SingleHeaderToolbarProps> = ({
   onOpenSchoolSettings,
   onOpenGenerator,
   onOpenVerification,
+  onOpenSubstitution,
   onOpenExcel,
   onOpenPrintPreview,
   onNewProject,
@@ -287,6 +290,10 @@ export const SingleHeaderToolbar: React.FC<SingleHeaderToolbarProps> = ({
           <button onClick={onOpenVerification} className="asc-ribbon-btn" title="Хуваарийн нөхцөл, дүрэм шалгах">
             <Gavel className="w-5 h-5 ribbon-icon" />
             <span className="mt-0.5 font-medium">Шалгах</span>
+          </button>
+          <button onClick={onOpenSubstitution} className="asc-ribbon-btn" title="Өвчтэй, чөлөөтэй багшийн хичээлийг зохицуулах">
+            <UserX className="w-5 h-5 ribbon-icon" />
+            <span className="mt-0.5 font-medium">Орлон заалт</span>
           </button>
           <button
             onClick={onOpenGenerator}

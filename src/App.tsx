@@ -49,6 +49,7 @@ import { VerificationDialog } from './components/VerificationDialog';
 import { ExcelImportExportDialog } from './components/ExcelImportExportDialog';
 import { PrintPreviewDialog } from './components/PrintPreviewDialog';
 import { BackupsDialog } from './components/BackupsDialog';
+import { SubstitutionDialog } from './components/SubstitutionDialog';
 
 export default function App() {
   const [project, setProjectRaw] = useState<ProjectState>(() => ensureIntegrity(loadSavedProject()).project);
@@ -155,6 +156,7 @@ export default function App() {
   const [showVerification, setShowVerification] = useState(false);
   const [showExcel, setShowExcel] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [showSubstitution, setShowSubstitution] = useState(false);
 
   // File picker ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -504,6 +506,7 @@ export default function App() {
         onOpenSchoolSettings={() => setShowSchoolSettings(true)}
         onOpenGenerator={() => setShowGenerator(true)}
         onOpenVerification={() => setShowVerification(true)}
+        onOpenSubstitution={() => setShowSubstitution(true)}
         onOpenExcel={() => setShowExcel(true)}
         onOpenPrintPreview={() => setShowPrintPreview(true)}
         onNewProject={handleNewProject}
@@ -570,7 +573,7 @@ export default function App() {
         {notice && (
           <div
             role="status"
-            className="absolute left-1/2 -translate-x-1/2 top-3 z-50 bg-[#2e2b26] text-[#fdfbf6] text-[12.5px] px-4 py-2 rounded-lg shadow-[0_6px_24px_rgba(46,43,38,0.25)] max-w-[560px] text-center"
+            className="fixed left-1/2 -translate-x-1/2 top-4 z-[70] bg-[#2e2b26] text-[#fdfbf6] text-[12.5px] px-4 py-2 rounded-lg shadow-[0_6px_24px_rgba(46,43,38,0.25)] max-w-[560px] text-center"
           >
             {notice}
           </div>
@@ -798,6 +801,23 @@ export default function App() {
           settings={project.settings}
           isOpen={showPrintPreview}
           onClose={() => setShowPrintPreview(false)}
+        />
+      )}
+
+      {showSubstitution && (
+        <SubstitutionDialog
+          isOpen={showSubstitution}
+          onClose={() => setShowSubstitution(false)}
+          settings={project.settings}
+          subjects={project.subjects}
+          teachers={project.teachers}
+          classes={project.classes}
+          classrooms={project.classrooms}
+          lessons={project.lessons}
+          scheduledCards={project.scheduledCards}
+          substitutions={project.substitutions || []}
+          onChange={(substitutions) => setProject((prev) => ({ ...prev, substitutions }))}
+          onNotify={notify}
         />
       )}
 

@@ -140,6 +140,8 @@ export interface SchoolSettings {
   shifts: ShiftConfig[];
   buildings: Building[];
   enableWeekAB: boolean; // А ба Б 7 хоногийн сэлгэлт дэмжих эсэх
+  /** А 7 хоногт хамаарах аль нэг Даваа гараг (YYYY-MM-DD). Байхгүй бол ISO 7 хоногийн сондгой = А. */
+  weekAReferenceDate?: string;
   defaultBreakMinutes: number; // 5 минут
   lunchBreakMinutes: number; // 10 минут
   periodsPerDay: number; // Convenience max periods
@@ -270,4 +272,70 @@ export interface MergeConflict {
   incomingCard: ScheduledCard;
   incomingManagerName: string;
   resolution: 'keep_existing' | 'use_incoming' | 'both_to_dock';
+}
+
+// ---------------------------------------------------------------------------
+// Орлон заалт (өвчтэй, чөлөөтэй багшийн хичээлийг зохицуулах)
+// ---------------------------------------------------------------------------
+
+export type AbsenceReason = 'sick' | 'leave' | 'training' | 'trip' | 'other';
+
+export interface TeacherAbsence {
+  id: string;
+  teacherId: string;
+  reason: AbsenceReason;
+  /** true бол бүтэн өдөр; false бол зөвхөн `slots` дахь цагууд */
+  allDay: boolean;
+  /** `${ээлж}_${цаг}` түлхүүрүүд (allDay=false үед) */
+  slots?: string[];
+  note?: string;
+}
+
+export type SubstitutionKind =
+  | 'substitute' // өөр багш орлон заана
+  | 'drop_coteacher' // хамтран заах багшгүйгээр үндсэн багш орно
+  | 'merge_subgroups' // дэд бүлгийг нөгөө бүлэгтэй нийлүүлж нэг багш бүх ангид орно
+  | 'merge_classes' // зэрэгцээ ангийн ижил хичээлтэй нийлүүлж 2 анги хамт орно
+  | 'swap' // тухайн ангийн өөр цагийн хичээлтэй байраа солино (багш өөр цагт ирж заана)
+  | 'move' // ангийн өдрийн өмнө/ард сул цаг руу шилжүүлнэ
+  | 'pull' // ангийн сүүлийн/эхний хичээлийг энэ цаг руу татна (анги эрт тарна / хожуу ирнэ)
+  | 'cancel'; // хичээл орохгүй (анги эрт тарах, хожуу ирэх эсвэл бие даан хичээллэнэ)
+
+export interface SubstitutionAction {
+  id: string;
+  /** Нөлөөлөлд орсон картын ID (суурь хуваарийнх) */
+  cardId: string;
+  kind: SubstitutionKind;
+  /** substitute: орлон заах багш */
+  teacherId?: string;
+  /** merge_subgroups / merge_classes: хүлээн авах карт */
+  hostCardId?: string;
+  /** merge_*: хүлээн авах картын багш (тайланд) */
+  hostTeacherId?: string;
+  /** swap / pull: хөдлөх нөгөө карт */
+  otherCardId?: string;
+  /** move / swap / pull: шинэ цаг (`periodIndex`) */
+  toPeriod?: number;
+  /** Менежер гараар сонгосон бол автомат зохицуулалт өөрчлөхгүй */
+  manual?: boolean;
+  /** Тайланд зориулсан хуулбар (суурь хуваарь өөрчлөгдсөн ч түүх үлдэнэ) */
+  snapshot: {
+    classId: string;
+    subjectId: string;
+    teacherId: string;
+    shift: number;
+    periodIndex: number;
+    subgroupName?: string;
+  };
+}
+
+export interface SubstitutionDay {
+  /** YYYY-MM-DD */
+  date: string;
+  dayIndex: number;
+  /** А/Б 7 хоног (enableWeekAB үед) */
+  weekCycle?: WeekCycle;
+  absences: TeacherAbsence[];
+  actions: SubstitutionAction[];
+  updatedAt: string;
 }
