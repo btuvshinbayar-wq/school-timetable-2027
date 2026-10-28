@@ -173,158 +173,275 @@ export function downloadExcelTemplate() {
 
   // 4. Classes sheet
   const classesData = [
-    ['Ангийн нэр', 'Товч нэр', 'Хэддүгээр анги', 'Өдөрт орох дээд цаг'],
-    ['10А', '10А', 10, 6],
-    ['10Б', '10Б', 10, 6],
-    ['11А', '11А', 11, 7],
+    ['Ангийн нэр', 'Товч нэр', 'Хэддүгээр анги', 'Ээлж', 'Байр', 'Өдөрт орох дээд цаг'],
+    ['10А', '10А', 10, 1, '1-р байр', 6],
+    ['10Б', '10Б', 10, 1, '1-р байр', 6],
+    ['6А', '6А', 6, 2, '2-р байр', 6],
   ];
   const wsClasses = XLSX.utils.aoa_to_sheet(classesData);
-  wsClasses['!cols'] = [{ wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 20 }];
+  wsClasses['!cols'] = [{ wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 14 }, { wch: 20 }];
   XLSX.utils.book_append_sheet(wb, wsClasses, 'Анги бүлэг');
 
   // 5. Lessons contract sheet
   const lessonsData = [
-    ['Анги', 'Хичээл', 'Багш', '7 хоногийн нийт цаг', 'Хос цагийн тоо', 'Дан цагийн тоо', 'Танхим'],
-    ['10А', 'Математик', 'Б. Бат-Эрдэнэ', 4, 1, 2, '101'],
-    ['10А', 'Монгол хэл', 'Д. Цэцэгмаа', 3, 0, 3, ''],
-    ['10А', 'Физик', 'Г. Мөнхбат', 3, 1, 1, '201'],
-    ['10Б', 'Математик', 'Г. Мөнхбат', 4, 1, 2, '101'],
+    ['Анги', 'Хичээл', 'Багш', '7 хоногийн нийт цаг', 'Хос цагийн тоо', 'Дан цагийн тоо', 'Танхим', 'Дэд бүлэг', '7 хоног (бүх/А/Б)'],
+    ['10А', 'Математик', 'Б. Бат-Эрдэнэ', 4, 1, 2, '101', '', 'бүх'],
+    ['10А', 'Монгол хэл', 'Д. Цэцэгмаа', 3, 0, 3, '', '', 'бүх'],
+    ['10А', 'Англи хэл', 'О. Сарангэрэл', 3, 0, 3, '', '1-р дэд бүлэг', 'бүх'],
+    ['10Б', 'Математик', 'Г. Мөнхбат', 4, 1, 2, '101', '', 'бүх'],
   ];
   const wsLessons = XLSX.utils.aoa_to_sheet(lessonsData);
-  wsLessons['!cols'] = [{ wch: 10 }, { wch: 18 }, { wch: 20 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
+  wsLessons['!cols'] = [{ wch: 10 }, { wch: 18 }, { wch: 20 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 16 }, { wch: 16 }];
   XLSX.utils.book_append_sheet(wb, wsLessons, 'Хичээлийн багц');
 
   XLSX.writeFile(wb, 'School_Timetable_Template_Mongolia.xlsx');
 }
 
+/** Excel-ээс уншсан түүхий мөрүүд (нэрээр холбогдоно) */
+export interface ExcelImportRaw {
+  subjects: { name: string; shortName?: string; color?: string }[];
+  teachers: { name: string; shortName?: string; maxPeriodsPerDay?: number; maxGapsPerDay?: number }[];
+  classrooms: { name: string; shortName?: string; capacity?: number; isShared?: boolean; building?: string }[];
+  classes: { name: string; shortName?: string; grade?: number; shift?: number; maxPeriodsPerDay?: number; building?: string }[];
+  lessons: {
+    row: number;
+    className: string;
+    subjectName: string;
+    teacherName: string;
+    total: number;
+    doubles: number;
+    singles?: number;
+    room?: string;
+    subgroup?: string;
+    week?: string;
+  }[];
+  sheets: string[];
+}
+
+const str = (v: any) => (v === undefined || v === null ? '' : String(v).trim());
+const num = (v: any) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+const pick = (r: any, keys: string[]) => {
+  for (const k of keys) if (r[k] !== undefined && str(r[k]) !== '') return r[k];
+  return undefined;
+};
+
 /**
- * Imports Excel file and parses entities
+ * Excel файлыг уншина. Хуудсыг нэрээр нь (яг таарсныг эхэлж) олно.
  */
-export async function importExcelFile(file: File): Promise<{
-  subjects?: Subject[];
-  teachers?: Teacher[];
-  classrooms?: Classroom[];
-  classes?: ClassGroup[];
-  lessons?: LessonContract[];
+export async function importExcelFile(file: File): Promise<ExcelImportRaw> {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+  const find = (exact: string[], contains: string[]) =>
+    wb.SheetNames.find((n) => exact.includes(n.trim())) ||
+    wb.SheetNames.find((n) => contains.some((c) => n.toLowerCase().includes(c.toLowerCase())));
+  const rows = (name?: string): any[] => (name ? XLSX.utils.sheet_to_json(wb.Sheets[name]) : []);
+
+  const lessonSheet = find(['Хичээлийн багц', 'Хичээлийн төлөвлөгөө', 'Lessons'], ['багц', 'төлөвлөгөө', 'lesson']);
+  const subjectSheet = find(['Хичээл', 'Subjects'], ['subject']) || wb.SheetNames.find((n) => n.includes('Хичээл') && n !== lessonSheet);
+  const teacherSheet = find(['Багш нар', 'Багш', 'Teachers'], ['багш', 'teacher']);
+  const roomSheet = find(['Анги танхим', 'Танхим', 'Classrooms', 'Rooms'], ['танхим', 'room']);
+  const classSheet = find(['Анги бүлэг', 'Ангиуд', 'Classes'], ['бүлэг', 'class']);
+
+  return {
+    sheets: [subjectSheet, teacherSheet, roomSheet, classSheet, lessonSheet].filter(Boolean) as string[],
+    subjects: rows(subjectSheet)
+      .map((r) => ({
+        name: str(pick(r, ['Хичээлийн нэр', 'Name', 'name'])),
+        shortName: str(pick(r, ['Товчлол', 'Short', 'short'])) || undefined,
+        color: str(pick(r, ['Өнгөний код', 'Color'])) || undefined,
+      }))
+      .filter((x) => x.name),
+    teachers: rows(teacherSheet)
+      .map((r) => ({
+        name: str(pick(r, ['Багшийн овог нэр', 'Name', 'name'])),
+        shortName: str(pick(r, ['Товч нэр', 'Short', 'short'])) || undefined,
+        maxPeriodsPerDay: num(pick(r, ['Өдөрт орох дээд цаг'])),
+        maxGapsPerDay: num(pick(r, ['Цонх цагийн хязгаар'])),
+      }))
+      .filter((x) => x.name),
+    classrooms: rows(roomSheet)
+      .map((r) => {
+        const shared = str(pick(r, ['Хуваалцах боломжтой (тийм/үгүй)', 'Shared'])).toLowerCase();
+        return {
+          name: str(pick(r, ['Танхимын нэр', 'Name', 'name'])),
+          shortName: str(pick(r, ['Дугаар', 'Short'])) || undefined,
+          capacity: num(pick(r, ['Суудлын тоо', 'Capacity'])),
+          isShared: shared ? /тийм|true|yes/.test(shared) : undefined,
+          building: str(pick(r, ['Байр', 'Building'])) || undefined,
+        };
+      })
+      .filter((x) => x.name),
+    classes: rows(classSheet)
+      .map((r) => ({
+        name: str(pick(r, ['Ангийн нэр', 'Name', 'name'])),
+        shortName: str(pick(r, ['Товч нэр', 'Short'])) || undefined,
+        grade: num(pick(r, ['Хэддүгээр анги', 'Grade'])),
+        shift: num(pick(r, ['Ээлж', 'Shift'])),
+        maxPeriodsPerDay: num(pick(r, ['Өдөрт орох дээд цаг'])),
+        building: str(pick(r, ['Байр', 'Building'])) || undefined,
+      }))
+      .filter((x) => x.name),
+    lessons: rows(lessonSheet)
+      .map((r, i) => ({
+        row: i + 2,
+        className: str(pick(r, ['Анги', 'Class'])),
+        subjectName: str(pick(r, ['Хичээл', 'Subject'])),
+        teacherName: str(pick(r, ['Багш', 'Teacher'])),
+        total: num(pick(r, ['7 хоногийн нийт цаг', 'Нийт цаг', 'Total'])) || 0,
+        doubles: num(pick(r, ['Хос цагийн тоо', 'Doubles'])) || 0,
+        singles: num(pick(r, ['Дан цагийн тоо', 'Singles'])),
+        room: str(pick(r, ['Танхим', 'Room'])) || undefined,
+        subgroup: str(pick(r, ['Дэд бүлэг', 'Subgroup'])) || undefined,
+        week: str(pick(r, ['7 хоног (бүх/А/Б)', '7 хоног', 'Week'])) || undefined,
+      }))
+      .filter((x) => x.className || x.subjectName || x.teacherName),
+  };
+}
+
+const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+const newId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+
+/**
+ * Импортолсон мөрүүдийг одоогийн өгөгдөлтэй НЭРЭЭР нэгтгэнэ (upsert):
+ * таарсан нь ID-гаа хадгалж шинэчлэгдэнэ, шинэ нь нэмэгдэнэ — өмнөх хичээлийн гэрээ, хуваарь эвдрэхгүй.
+ */
+export function mergeExcelImport(
+  current: {
+    subjects: Subject[];
+    teachers: Teacher[];
+    classrooms: Classroom[];
+    classes: ClassGroup[];
+    lessons: LessonContract[];
+    buildings: { id: string; name: string; shortName: string }[];
+  },
+  raw: ExcelImportRaw
+): {
+  subjects: Subject[];
+  teachers: Teacher[];
+  classrooms: Classroom[];
+  classes: ClassGroup[];
+  lessons: LessonContract[];
   messages: string[];
-}> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
+} {
+  const messages: string[] = [];
+  const findBuilding = (name?: string) => {
+    if (!name) return undefined;
+    return current.buildings.find((b) => norm(b.name) === norm(name) || norm(b.shortName) === norm(name))?.id;
+  };
 
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const wb = XLSX.read(data, { type: 'array' });
-        const messages: string[] = [];
-
-        let newSubjects: Subject[] | undefined;
-        let newTeachers: Teacher[] | undefined;
-        let newRooms: Classroom[] | undefined;
-        let newClasses: ClassGroup[] | undefined;
-        let newLessons: LessonContract[] | undefined;
-
-        // Try to read 'Хичээл' or 'Subjects'
-        const subSheetName = wb.SheetNames.find((s) => s.includes('Хичээл') || s.toLowerCase().includes('subject'));
-        if (subSheetName) {
-          const sheet = wb.Sheets[subSheetName];
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          newSubjects = rows.map((r, i) => {
-            const name = r['Хичээлийн нэр'] || r['Name'] || r['name'] || `Хичээл ${i + 1}`;
-            const shortName = r['Товчлол'] || r['Short'] || r['short'] || name.substring(0, 3);
-            const color = r['Өнгөний код'] || r['Color'] || '#3b82f6';
-            return {
-              id: `sub_imp_${i + 1}`,
-              name,
-              shortName,
-              color,
-              timeOff: {},
-              distributionRule: 'ideal',
-            };
-          });
-          messages.push(`Хичээлүүд: ${newSubjects.length} ширхэг импортлогдлоо.`);
-        }
-
-        // Teachers
-        const teachSheetName = wb.SheetNames.find((s) => s.includes('Багш') || s.toLowerCase().includes('teacher'));
-        if (teachSheetName) {
-          const sheet = wb.Sheets[teachSheetName];
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          newTeachers = rows.map((r, i) => {
-            const name = r['Багшийн овог нэр'] || r['Name'] || r['name'] || `Багш ${i + 1}`;
-            const shortName = r['Товч нэр'] || r['Short'] || r['short'] || name.split(' ').pop() || name;
-            return {
-              id: `t_imp_${i + 1}`,
-              name,
-              shortName,
-              color: '#10b981',
-              maxPeriodsPerDay: Number(r['Өдөрт орох дээд цаг']) || 5,
-              maxGapsPerDay: Number(r['Цонх цагийн хязгаар']) || 1,
-              timeOff: {},
-            };
-          });
-          messages.push(`Багш нар: ${newTeachers.length} ширхэг импортлогдлоо.`);
-        }
-
-        // Rooms
-        const roomSheetName = wb.SheetNames.find((s) => s.includes('танхим') || s.toLowerCase().includes('room'));
-        if (roomSheetName) {
-          const sheet = wb.Sheets[roomSheetName];
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          newRooms = rows.map((r, i) => {
-            const name = r['Танхимын нэр'] || r['Name'] || r['name'] || `Танхим ${i + 1}`;
-            const shortName = r['Дугаар'] || r['Short'] || name;
-            const sharedStr = String(r['Хуваалцах боломжтой (тийм/үгүй)'] || r['Shared'] || '').toLowerCase();
-            return {
-              id: `r_imp_${i + 1}`,
-              name,
-              shortName,
-              buildingId: 'bld-1',
-              capacity: Number(r['Суудлын тоо']) || 36,
-              isShared: sharedStr.includes('тийм') || sharedStr.includes('true') || sharedStr.includes('yes'),
-              color: '#60a5fa',
-              timeOff: {},
-            };
-          });
-          messages.push(`Танхимууд: ${newRooms.length} ширхэг импортлогдлоо.`);
-        }
-
-        // Classes
-        const classSheetName = wb.SheetNames.find((s) => s.includes('бүлэг') || s.toLowerCase().includes('class'));
-        if (classSheetName) {
-          const sheet = wb.Sheets[classSheetName];
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          newClasses = rows.map((r, i) => {
-            const name = r['Ангийн нэр'] || r['Name'] || `Анги ${i + 1}`;
-            const shortName = r['Товч нэр'] || name;
-            const grade = Number(r['Хэддүгээр анги']) || parseInt(name) || 10;
-            return {
-              id: `c_imp_${i + 1}`,
-              name,
-              shortName,
-              grade,
-              shift: Number(r['Ээлж']) || (grade <= 6 ? 2 : 1),
-              buildingId: 'bld-1',
-              color: '#38bdf8',
-              maxPeriodsPerDay: Number(r['Өдөрт орох дээд цаг']) || 6,
-              timeOff: {},
-            };
-          });
-          messages.push(`Ангиуд: ${newClasses.length} ширхэг импортлогдлоо.`);
-        }
-
-        resolve({
-          subjects: newSubjects,
-          teachers: newTeachers,
-          classrooms: newRooms,
-          classes: newClasses,
-          messages,
-        });
-      } catch (err: any) {
-        reject(new Error(`Excel файл уншихад алдаа гарлаа: ${err?.message || err}`));
+  const upsert = <T extends { id: string; name: string }>(
+    list: T[],
+    incoming: any[],
+    label: string,
+    make: (x: any) => T,
+    update: (old: T, x: any) => T
+  ): T[] => {
+    const out = [...list];
+    let added = 0;
+    let updated = 0;
+    for (const x of incoming) {
+      const idx = out.findIndex((o) => norm(o.name) === norm(x.name));
+      if (idx >= 0) {
+        out[idx] = update(out[idx], x);
+        updated++;
+      } else {
+        out.push(make(x));
+        added++;
       }
-    };
+    }
+    if (incoming.length > 0) messages.push(`✅ ${label}: ${added} шинэ, ${updated} шинэчлэгдсэн.`);
+    return out;
+  };
 
-    reader.onerror = () => reject(new Error('Файл уншихад алдаа гарлаа.'));
-    reader.readAsArrayBuffer(file);
-  });
+  const subjects = upsert(
+    current.subjects,
+    raw.subjects,
+    'Хичээл',
+    (x) => ({ id: newId('sub'), name: x.name, shortName: x.shortName || x.name.slice(0, 4), color: x.color || '#857d70', timeOff: {}, distributionRule: 'ideal' as const }),
+    (o, x) => ({ ...o, shortName: x.shortName || o.shortName, color: x.color || o.color })
+  );
+  const teachers = upsert(
+    current.teachers,
+    raw.teachers,
+    'Багш',
+    (x) => ({ id: newId('t'), name: x.name, shortName: x.shortName || x.name.split(' ').pop() || x.name, color: '#6b8c5a', timeOff: {}, maxPeriodsPerDay: x.maxPeriodsPerDay || 5, maxGapsPerDay: x.maxGapsPerDay ?? 1 }),
+    (o, x) => ({ ...o, shortName: x.shortName || o.shortName, maxPeriodsPerDay: x.maxPeriodsPerDay ?? o.maxPeriodsPerDay, maxGapsPerDay: x.maxGapsPerDay ?? o.maxGapsPerDay })
+  );
+  const classrooms = upsert(
+    current.classrooms,
+    raw.classrooms,
+    'Танхим',
+    (x) => ({ id: newId('r'), name: x.name, shortName: x.shortName || x.name, buildingId: findBuilding(x.building) || current.buildings[0]?.id || 'bld-1', capacity: x.capacity || 36, isShared: !!x.isShared, maxConcurrentClasses: x.isShared ? 2 : 1, color: '#93b8a8', timeOff: {} }),
+    (o, x) => ({ ...o, shortName: x.shortName || o.shortName, capacity: x.capacity ?? o.capacity, isShared: x.isShared ?? o.isShared, buildingId: findBuilding(x.building) || o.buildingId })
+  );
+  const classes = upsert(
+    current.classes,
+    raw.classes,
+    'Анги',
+    (x) => {
+      const grade = x.grade || parseInt(x.name) || 10;
+      return { id: newId('c'), name: x.name, shortName: x.shortName || x.name, grade, shift: x.shift || 1, buildingId: findBuilding(x.building) || current.buildings[0]?.id, color: '#c4a2be', timeOff: {}, maxPeriodsPerDay: x.maxPeriodsPerDay || 6, subgroups: [] };
+    },
+    (o, x) => ({ ...o, shortName: x.shortName || o.shortName, grade: x.grade ?? o.grade, shift: x.shift ?? o.shift, maxPeriodsPerDay: x.maxPeriodsPerDay ?? o.maxPeriodsPerDay, buildingId: findBuilding(x.building) || o.buildingId })
+  );
+
+  // Хичээлийн гэрээ: анги + хичээл + багш (+ дэд бүлэг)-ээр нэгтгэнэ
+  const lessons = [...current.lessons];
+  let lAdded = 0;
+  let lUpdated = 0;
+  const problems: string[] = [];
+  const byName = <T extends { name: string; shortName?: string }>(list: T[], name: string) =>
+    list.find((x) => norm(x.name) === norm(name)) || list.find((x) => x.shortName && norm(x.shortName) === norm(name));
+  for (const r of raw.lessons) {
+    const cls = byName(classes, r.className);
+    const sub = byName(subjects, r.subjectName);
+    const t = byName(teachers, r.teacherName);
+    if (!cls || !sub || !t) {
+      const miss = [!cls && `анги "${r.className}"`, !sub && `хичээл "${r.subjectName}"`, !t && `багш "${r.teacherName}"`].filter(Boolean).join(', ');
+      problems.push(`${r.row}-р мөр: ${miss} олдсонгүй`);
+      continue;
+    }
+    const doubles = Math.max(0, Math.floor(r.doubles));
+    const total = r.total > 0 ? r.total : (r.singles || 0) + doubles * 2;
+    if (total <= 0 || doubles * 2 > total) {
+      problems.push(`${r.row}-р мөр: цагийн тоо буруу (нийт ${total}, хос ${doubles})`);
+      continue;
+    }
+    const room = r.room ? classrooms.find((x) => norm(x.name) === norm(r.room!) || norm(x.shortName) === norm(r.room!)) : undefined;
+    const w = (r.week || '').toLowerCase();
+    const weekCycle = w.startsWith('а') || w === 'a' ? 'week_a' : w.startsWith('б') || w === 'b' ? 'week_b' : 'all';
+    const subgroupName = r.subgroup || undefined;
+    const idx = lessons.findIndex(
+      (l) => l.classId === cls.id && l.subjectId === sub.id && l.teacherId === t.id && (l.subgroupName || '') === (subgroupName || '') && (l.weekCycle || 'all') === weekCycle
+    );
+    const data = {
+      subjectId: sub.id,
+      teacherId: t.id,
+      classId: cls.id,
+      subgroupName,
+      totalPeriods: total,
+      doubleLessons: doubles,
+      singleLessons: total - doubles * 2,
+      classroomId: room?.id,
+      weekCycle: weekCycle as LessonContract['weekCycle'],
+    };
+    if (idx >= 0) {
+      lessons[idx] = { ...lessons[idx], ...data, classroomId: data.classroomId ?? lessons[idx].classroomId };
+      lUpdated++;
+    } else {
+      lessons.push({ id: newId('l'), ...data });
+      lAdded++;
+    }
+  }
+  if (raw.lessons.length > 0) messages.push(`✅ Хичээлийн төлөвлөгөө: ${lAdded} шинэ, ${lUpdated} шинэчлэгдсэн.`);
+  if (problems.length > 0) {
+    messages.push(`⚠️ ${problems.length} мөрийг алгаслаа:`);
+    messages.push(...problems.slice(0, 20).map((p) => `   ${p}`));
+    if (problems.length > 20) messages.push(`   … бас ${problems.length - 20} мөр`);
+  }
+  if (raw.sheets.length === 0) messages.push('❌ Танигдах хуудас олдсонгүй. Загвар файлыг татаж ашиглана уу.');
+  return { subjects, teachers, classrooms, classes, lessons, messages };
 }

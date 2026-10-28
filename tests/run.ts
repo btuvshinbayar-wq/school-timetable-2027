@@ -14,6 +14,9 @@ import type {
   Teacher,
 } from '../src/types/timetable';
 import { auditHardConstraints } from './audit';
+import { applyMove, evaluateMove } from '../src/utils/manualEdit';
+import { ensureIntegrity } from '../src/utils/integrity';
+import { mergeExcelImport } from '../src/utils/excelIO';
 
 const settings = D.getDefaultSchoolSettings();
 const subjects = D.DEFAULT_SUBJECTS;
@@ -126,10 +129,18 @@ async function main() {
   console.log('\nВ. Ээлжтэй чөлөөт цаг');
   {
     // Зөвхөн 2-р ээлжийн Даваа 1-р цаг хаалттай
+    // Ангиудад зөвхөн Даваагийн 1, 2-р цагийг үлдээж, багшийн хаалттай цаг аль ээлжид үйлчлэхийг шалгана
+    const onlyMonday = (shift: number) => {
+      const off: Record<string, any> = {};
+      for (let d = 0; d < 5; d++) for (let p = 0; p < 6; p++) if (!(d === 0 && p <= 1)) off[`${shift}_${d}_${p}`] = 'forbidden';
+      return off;
+    };
+    const X = { ...C('X', 1), timeOff: onlyMonday(1) };
+    const Q = { ...C('Q', 2), timeOff: onlyMonday(2) };
     const r = await gen(
-      [L('m1', { teacherId: 'A', classId: 'X' }), L('m2', { teacherId: 'A', classId: 'Q' })],
-      [T('A', { '2_0_0': 'forbidden' })],
-      [C('X', 1), C('Q', 2)]
+      [L('m1', { teacherId: 'A', classId: 'X' }), L('m2', { teacherId: 'A', classId: 'Q' }), L('x2', { teacherId: 'B', classId: 'X' })],
+      [T('A', { '2_0_0': 'forbidden' }), T('B', { '1_0_0': 'forbidden' })],
+      [X, Q]
     );
     const [m1] = byContract(r.scheduledCards, 'm1');
     const [m2] = byContract(r.scheduledCards, 'm2');
@@ -233,6 +244,90 @@ async function main() {
     check('бие даасан аудитаар хатуу зөрчил 0', Object.values(audit).every((v) => v === 0));
     const errs = r.conflicts.filter((c) => c.severity === 'error');
     check('verify-ийн алдаа 0', errs.length === 0, errs.slice(0, 3).map((e) => e.description).join(' | '));
+  }
+
+  console.log('\nИ. "Зогсоох" дарвал одоог хүртэлх хамгийн сайн хуваарийг шууд буцаана');
+  {
+    const { lessons, teachers, classes, rooms } = buildSyntheticSchool();
+    const t0 = Date.now();
+    const r = await generateTimetable(subjects, teachers, classes, rooms, lessons, [], settings, [], undefined, {
+      timeLimitMs: 60000,
+      shouldStop: () => Date.now() - t0 > 1500,
+    });
+    const ms = Date.now() - t0;
+    check('3 сек дотор буцсан', ms < 3000, `${ms} мс`);
+    check('буцсан хуваарьт хатуу зөрчилгүй', Object.values(auditHardConstraints(r.scheduledCards, lessons, classes, teachers, rooms, settings)).every((v) => v === 0));
+  }
+
+  console.log('\nК. Гараар зөөх: зөв шалгалт, хос цаг, солих, түгжээ');
+  {
+    const card = (id: string, o: Partial<ScheduledCard>): ScheduledCard => ({
+      id, contractId: id, subjectId: 'sub-1', teacherId: 'A', classId: 'X', shift: 1, dayIndex: 0, periodIndex: 0, weekCycle: 'all', ...o,
+    });
+    const cards: ScheduledCard[] = [
+      card('x1', { teacherId: 'A', classId: 'X', periodIndex: 0 }),
+      card('x2', { teacherId: 'B', classId: 'X', periodIndex: 1 }),
+      card('d1', { teacherId: 'C', classId: 'X', periodIndex: 2, isDoublePart: 'first', linkedCardId: 'd2' }),
+      card('d2', { teacherId: 'C', classId: 'X', periodIndex: 3, isDoublePart: 'second', linkedCardId: 'd1' }),
+      card('y1', { teacherId: 'A', classId: 'Y', dayIndex: 1, periodIndex: 0 }),
+      card('lk', { teacherId: 'D', classId: 'X', dayIndex: 2, periodIndex: 0, isLocked: true }),
+    ];
+    const ctx = { settings, subjects, teachers: ['A', 'B', 'C', 'D'].map((t) => T(t)), classes: [C('X'), C('Y')], classrooms: [], lessons: [] };
+    check('багш завгүй цаг → боломжгүй', evaluateMove(ctx, cards, 'x1', 1, 0).status === 'bad');
+    check('сул цаг → болно', evaluateMove(ctx, cards, 'x1', 3, 0).status === 'ok');
+    const sw = evaluateMove(ctx, cards, 'x1', 0, 1);
+    check('нэг ангийн эзэлсэн нүд → солих', sw.status === 'swap' && !!sw.swapWith?.includes('x2'));
+    const after = applyMove(cards, 'x1', 0, 1, sw);
+    check('солилт хийгдсэн', after.find((c) => c.id === 'x1')!.periodIndex === 1 && after.find((c) => c.id === 'x2')!.periodIndex === 0);
+    const dv = evaluateMove(ctx, cards, 'd2', 4, 3);
+    const moved = applyMove(cards, 'd2', 4, 3, dv);
+    const md1 = moved.find((c) => c.id === 'd1')!;
+    const md2 = moved.find((c) => c.id === 'd2')!;
+    check('хос цагийн хоёр хагас хамт зөөгдсөн', dv.status === 'ok' && md1.dayIndex === 4 && md1.periodIndex === 2 && md2.periodIndex === 3);
+    check('хос цаг ээлжийн төгсгөлд багтахгүй', evaluateMove(ctx, cards, 'd1', 4, 5).status === 'bad');
+    check('түгжсэн карт зөөгдөхгүй', evaluateMove(ctx, cards, 'lk', 3, 3).status === 'bad');
+    check('анги хэзээ ч солигдохгүй', applyMove(cards, 'x1', 3, 0, { status: 'ok' }).every((c, i) => c.classId === cards[i].classId));
+  }
+
+  console.log('\nЛ. Устгахад холбоотой өгөгдөл цэвэрлэгдэнэ');
+  {
+    const lessons = [L('l1', { teacherId: 'A', classId: 'X' }), L('l2', { teacherId: 'B', classId: 'X', coTeacherIds: ['A'] })];
+    const cards: ScheduledCard[] = [
+      { id: 'c1', contractId: 'l1', subjectId: 'sub-1', teacherId: 'A', classId: 'X', shift: 1, dayIndex: 0, periodIndex: 0, weekCycle: 'all' },
+      { id: 'c2', contractId: 'l2', subjectId: 'sub-1', teacherId: 'B', classId: 'X', shift: 1, dayIndex: 0, periodIndex: 1, weekCycle: 'all' },
+    ];
+    const proj: any = { subjects, teachers: [T('B')], classes: [C('X')], classrooms: [], lessons, scheduledCards: cards, settings };
+    const { project, report } = ensureIntegrity(proj);
+    check('устгасан багшийн гэрээ, карт арилсан', report.removedLessons === 1 && report.removedCards === 1);
+    check('хамтран заах багшийн холбоос цэвэрлэгдсэн', project.lessons[0].coTeacherIds!.length === 0);
+  }
+
+  console.log('\nМ. Excel импорт нэрээр нэгтгэнэ');
+  {
+    const current = {
+      subjects: [{ id: 'sub-1', name: 'Математик', shortName: 'Мат', color: '#000', timeOff: {} }],
+      teachers: [T('t1')].map((t) => ({ ...t, name: 'Б. Бат' })),
+      classrooms: [],
+      classes: [{ ...C('c1'), name: '10А' }],
+      lessons: [L('old', { subjectId: 'sub-1', teacherId: 't1', classId: 'c1', totalPeriods: 3, singleLessons: 3 })],
+      buildings: [{ id: 'bld-1', name: '1-р байр', shortName: '1-р байр' }],
+    };
+    const merged = mergeExcelImport(current as any, {
+      sheets: ['x'],
+      subjects: [{ name: 'математик', shortName: 'МАТ' }, { name: 'Физик' }],
+      teachers: [{ name: 'Б. Бат' }],
+      classrooms: [],
+      classes: [{ name: '10А', shift: 1 }, { name: '10Б', shift: 1 }],
+      lessons: [
+        { row: 2, className: '10А', subjectName: 'Математик', teacherName: 'Б. Бат', total: 5, doubles: 1 },
+        { row: 3, className: '10Б', subjectName: 'Физик', teacherName: 'Б. Бат', total: 2, doubles: 0 },
+        { row: 4, className: '10В', subjectName: 'Физик', teacherName: 'Б. Бат', total: 2, doubles: 0 },
+      ],
+    });
+    check('таарсан хичээл ID-гаа хадгалсан', merged.subjects.find((x) => x.id === 'sub-1')?.shortName === 'МАТ' && merged.subjects.length === 2);
+    check('одоо байгаа гэрээ шинэчлэгдсэн (ID хэвээр)', merged.lessons.find((l) => l.id === 'old')?.totalPeriods === 5);
+    check('шинэ гэрээ нэмэгдсэн', merged.lessons.length === 2);
+    check('олдохгүй анги мэдэгдэгдсэн', merged.messages.some((m) => m.includes('10В')));
   }
 
   console.log(`\n${passed} амжилттай, ${failed} амжилтгүй`);

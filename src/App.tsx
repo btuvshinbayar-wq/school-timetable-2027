@@ -3,7 +3,7 @@
  * 2-3 ээлж, олон байр, А/Б 7 хоногтой Монголын сургуулийн хичээлийн хуваарийн систем
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Subject,
   Teacher,
@@ -29,7 +29,10 @@ import {
   ProjectState,
 } from './utils/storage';
 import { getDefaultSchoolSettings, DEFAULT_BUILDINGS, DEFAULT_RELATIONSHIPS, DEFAULT_MANAGERS } from './utils/defaultData';
-import { verifyTimetable, generateTimetable } from './utils/generator';
+import { verifyTimetable } from './utils/generator';
+import { ensureIntegrity } from './utils/integrity';
+import { ExcelImportRaw, mergeExcelImport } from './utils/excelIO';
+import { applyMove, cardGroup, evaluateMove, evaluateNew, newCardsFromContract, EditContext } from './utils/manualEdit';
 
 // Components
 import { DesktopWindowFrame } from './components/DesktopWindowFrame';
@@ -48,7 +51,82 @@ import { PrintPreviewDialog } from './components/PrintPreviewDialog';
 import { BackupsDialog } from './components/BackupsDialog';
 
 export default function App() {
-  const [project, setProject] = useState<ProjectState>(() => loadSavedProject());
+  const [project, setProjectRaw] = useState<ProjectState>(() => ensureIntegrity(loadSavedProject()).project);
+
+  // --- Буцаах / дахих түүх (сүүлийн 60 алхам) ---
+  const past = useRef<ProjectState[]>([]);
+  const future = useRef<ProjectState[]>([]);
+  const [, setHistoryTick] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<any>(null);
+  const notify = useCallback((msg: string) => {
+    setNotice(msg);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 4000);
+  }, []);
+
+  /** Хэрэглэгчийн өөрчлөлт: түүхэнд хадгалж, холбоосын бүрэн бүтэн байдлыг хангана */
+  const setProject = useCallback((updater: ProjectState | ((prev: ProjectState) => ProjectState)) => {
+    setProjectRaw((prev) => {
+      const raw = typeof updater === 'function' ? (updater as (p: ProjectState) => ProjectState)(prev) : updater;
+      if (raw === prev) return prev;
+      const { project: next } = ensureIntegrity(raw);
+      past.current.push(prev);
+      if (past.current.length > 60) past.current.shift();
+      future.current = [];
+      return next;
+    });
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  /** Түүхгүй солих (файл нээх, хуулбар сэргээх) */
+  const replaceProject = useCallback((next: ProjectState) => {
+    past.current = [];
+    future.current = [];
+    setProjectRaw(ensureIntegrity(next).project);
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  const undo = useCallback(() => {
+    if (past.current.length === 0) return;
+    setProjectRaw((prev) => {
+      const last = past.current.pop()!;
+      future.current.push(prev);
+      return last;
+    });
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  const redo = useCallback(() => {
+    if (future.current.length === 0) return;
+    setProjectRaw((prev) => {
+      const next = future.current.pop()!;
+      past.current.push(prev);
+      return next;
+    });
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if ((k === 'z' && !e.shiftKey) || k === 'я') {
+        e.preventDefault();
+        undo();
+      } else if (k === 'y' || (k === 'z' && e.shiftKey) || k === 'н') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+
+  const [dockDragContractId, setDockDragContractId] = useState<string | null>(null);
   const [isInitialMandatory, setIsInitialMandatory] = useState<boolean>(() => !isAppInitialized());
   const [showBackups, setShowBackups] = useState(false);
   const [lastBackupTime, setLastBackupTime] = useState<string>(
@@ -105,7 +183,7 @@ export default function App() {
 
   // Ensure "Математик өдөрт 1-с илүүгүй удаа орох" is removed and all requested rules are present in exact order
   useEffect(() => {
-    setProject((prev) => {
+    setProjectRaw((prev) => {
       let changed = false;
       const filtered = prev.relationships.filter(
         (r) => r.id !== 'rel-1' && !r.name?.includes('Математик өдөрт 1') && r.id !== 'rel-2' && r.id !== 'rel-3'
@@ -174,25 +252,8 @@ export default function App() {
     }
   }, [project]);
 
-  // Initial auto-generation if scheduled cards are empty
-  useEffect(() => {
-    if (project.scheduledCards.length === 0) {
-      generateTimetable(
-        project.subjects,
-        project.teachers,
-        project.classes,
-        project.classrooms,
-        project.lessons,
-        project.relationships,
-        project.settings
-      ).then((result) => {
-        setProject((prev) => ({
-          ...prev,
-          scheduledCards: result.scheduledCards,
-        }));
-      });
-    }
-  }, []);
+  // Анх ачаалахад хуваарийг автоматаар бодохгүй: том сургуульд бодолт удаан тул
+  // хэрэглэгч "Хуваарь бодох" цонхоор (тусдаа урсгалд) өөрөө эхлүүлнэ.
 
   const handleOpenLessonsForSubject = (subjectId: string) => {
     setLessonsFilterSubjectId(subjectId);
@@ -215,87 +276,104 @@ export default function App() {
     setShowLessons(true);
   };
 
-  // Drag and drop card moving
-  const handleMoveCard = (cardId: string, targetDay: number, targetPeriod: number, targetClassId?: string) => {
-    setProject((prev) => {
-      const cards = prev.scheduledCards.map((c) => {
-        if (c.id === cardId) {
-          return {
-            ...c,
-            dayIndex: targetDay,
-            periodIndex: targetPeriod,
-            classId: targetClassId || c.classId,
-          };
-        }
-        return c;
-      });
-      return { ...prev, scheduledCards: cards };
-    });
+  const editCtx: EditContext = {
+    settings: project.settings,
+    subjects: project.subjects,
+    teachers: project.teachers,
+    classes: project.classes,
+    classrooms: project.classrooms,
+    lessons: project.lessons,
+  };
+
+  // Чирж зөөх: анги хэзээ ч солигдохгүй, хос цаг хамт, түгжсэнийг хөдөлгөхгүй, эзэлсэн бол солино
+  const handleMoveCard = (cardId: string, targetDay: number, targetPeriod: number) => {
+    const verdict = evaluateMove(editCtx, project.scheduledCards, cardId, targetDay, targetPeriod);
+    if (verdict.status === 'bad') {
+      if (verdict.reason && verdict.reason !== 'Ижил байрлал') notify(verdict.reason);
+      return;
+    }
+    const nextCards = applyMove(project.scheduledCards, cardId, targetDay, targetPeriod, verdict);
+    setProject((prev) => ({ ...prev, scheduledCards: nextCards }));
+    // Хатуу дүрэм (жишээ нь "нэг өдөр орохгүй") зөрчигдсөн эсэхийг мэдэгдэнэ — зөөлтийг хориглохгүй, aSc-тай адил
+    const newErrors = newRuleErrors(nextCards);
+    if (newErrors.length > 0) notify(`Зөөгдлөө, гэхдээ: ${newErrors[0]}. Буцаах бол Ctrl+Z.`);
+    else if (verdict.status === 'swap') notify('Хоёр хичээлийн байрыг солилоо. Буцаах бол Ctrl+Z.');
+  };
+
+  /** Өөрчлөлтийн дараа шинээр гарч ирсэн хатуу зөрчлүүдийн тайлбар */
+  const newRuleErrors = (nextCards: ScheduledCard[]): string[] => {
+    const before = new Set(conflicts.filter((c) => c.severity === 'error').map((c) => c.id));
+    return verifyTimetable(
+      nextCards,
+      project.subjects,
+      project.teachers,
+      project.classes,
+      project.classrooms,
+      project.settings,
+      project.relationships,
+      project.lessons
+    )
+      .filter((c) => c.severity === 'error' && !before.has(c.id))
+      .map((c) => c.title.toLowerCase());
   };
 
   const handleRemoveCard = (cardId: string) => {
+    const ids = new Set(cardGroup(project.scheduledCards, cardId).map((c) => c.id));
     setProject((prev) => ({
       ...prev,
-      scheduledCards: prev.scheduledCards.filter((c) => c.id !== cardId),
+      scheduledCards: prev.scheduledCards.filter((c) => !ids.has(c.id)),
     }));
   };
 
   const handleToggleLock = (cardId: string) => {
+    const group = cardGroup(project.scheduledCards, cardId);
+    const ids = new Set(group.map((c) => c.id));
+    const lock = !group[0]?.isLocked;
     setProject((prev) => ({
       ...prev,
-      scheduledCards: prev.scheduledCards.map((c) =>
-        c.id === cardId ? { ...c, isLocked: !c.isLocked } : c
-      ),
+      scheduledCards: prev.scheduledCards.map((c) => (ids.has(c.id) ? { ...c, isLocked: lock } : c)),
     }));
   };
 
-  const handleDropNewCard = (contractId: string, day: number, period: number, classId?: string) => {
+  const placeFromContract = (contract: LessonContract, day: number, period: number, quiet = false): boolean => {
+    const placed = project.scheduledCards.filter((c) => c.contractId === contract.id).length;
+    if (placed >= contract.totalPeriods) {
+      if (!quiet) notify('Энэ хичээлийн бүх цаг хуваарьт орсон байна');
+      return false;
+    }
+    const cls = project.classes.find((c) => c.id === contract.classId);
+    const cards = newCardsFromContract(contract, cls, project.scheduledCards, day, period);
+    const verdict = evaluateNew(editCtx, project.scheduledCards, cards);
+    if (verdict.status !== 'ok') {
+      if (!quiet) notify(verdict.reason || 'Энэ цагт тавих боломжгүй');
+      return false;
+    }
+    const nextCards = [...project.scheduledCards, ...cards];
+    setProject((prev) => ({ ...prev, scheduledCards: [...prev.scheduledCards, ...cards] }));
+    if (!quiet) {
+      const newErrors = newRuleErrors(nextCards);
+      if (newErrors.length > 0) notify(`Тавигдлаа, гэхдээ: ${newErrors[0]}. Буцаах бол Ctrl+Z.`);
+    }
+    return true;
+  };
+
+  const handleDropNewCard = (contractId: string, day: number, period: number) => {
     const contract = project.lessons.find((l) => l.id === contractId);
-    if (!contract) return;
-    const cls = project.classes.find((c) => c.id === (classId || contract.classId));
-
-    const newCard: ScheduledCard = {
-      id: `${contract.id}_placed_${Date.now()}`,
-      contractId: contract.id,
-      subjectId: contract.subjectId,
-      teacherId: contract.teacherId,
-      coTeacherIds: contract.coTeacherIds && contract.coTeacherIds.length > 0 ? [...contract.coTeacherIds] : undefined,
-      classId: classId || contract.classId,
-      jointClassIds: contract.jointClassIds && contract.jointClassIds.length > 0 ? [...contract.jointClassIds] : undefined,
-      subgroupName: contract.subgroupName,
-      classroomId: contract.classroomId,
-      shift: cls?.shift || 1,
-      weekCycle: contract.weekCycle || 'all',
-      dayIndex: day,
-      periodIndex: period,
-    };
-
-    setProject((prev) => ({
-      ...prev,
-      scheduledCards: [...prev.scheduledCards, newCard],
-    }));
+    if (contract) placeFromContract(contract, day, period);
+    setDockDragContractId(null);
   };
 
+  // Тавиур дээр товшиход: хатуу хязгаарлалт зөрчихгүй эхний нүдэнд тавина
   const handleQuickPlaceCard = (contract: LessonContract) => {
     const cls = project.classes.find((c) => c.id === contract.classId);
     const shiftConf = project.settings.shifts.find((s) => s.shiftNumber === (cls?.shift || 1)) || project.settings.shifts[0];
     const periodsCount = shiftConf?.periodsCount || 6;
-
     for (let d = 0; d < project.settings.daysPerWeek; d++) {
       for (let p = 0; p < periodsCount; p++) {
-        const classBusy = project.scheduledCards.some(
-          (c) => c.classId === contract.classId && c.dayIndex === d && c.periodIndex === p
-        );
-        const teacherBusy = project.scheduledCards.some(
-          (c) => c.teacherId === contract.teacherId && c.shift === (cls?.shift || 1) && c.dayIndex === d && c.periodIndex === p
-        );
-
-        if (!classBusy && !teacherBusy) {
-          handleDropNewCard(contract.id, d, p);
-          return;
-        }
+        if (placeFromContract(contract, d, p, true)) return;
       }
     }
+    notify('Энэ хичээлийг зөрчилгүй тавих сул цаг олдсонгүй. Чирж тавьбал аль цаг боломжгүйг харуулна.');
   };
 
   // Project file handling
@@ -306,13 +384,18 @@ export default function App() {
       )
     ) {
       const freshSettings = getDefaultSchoolSettings();
-      setProject((prev) => ({
-        ...prev,
+      // Шинэ төсөл: хичээлийн жагсаалт, дүрмүүдийг үлдээж, сургуулийн бусад мэдээллийг цэвэрлэнэ
+      replaceProject({
+        ...project,
         projectName: '',
         settings: freshSettings,
         buildings: DEFAULT_BUILDINGS,
+        teachers: [],
+        classes: [],
+        classrooms: [],
+        lessons: [],
         scheduledCards: [],
-      }));
+      });
       setIsInitialMandatory(true);
       setShowSchoolSettings(true);
     }
@@ -327,7 +410,7 @@ export default function App() {
     if (!file) return;
     try {
       const imported = await importProjectFromFile(file);
-      setProject(imported);
+      replaceProject(imported);
       setAppInitialized(true);
       setIsInitialMandatory(false);
       triggerAutoBackup(imported, true);
@@ -369,20 +452,28 @@ export default function App() {
     }
   };
 
-  // Excel Import handler
-  const handleExcelImport = (data: {
-    subjects?: Subject[];
-    teachers?: Teacher[];
-    classrooms?: Classroom[];
-    classes?: ClassGroup[];
-  }) => {
+  // Excel импорт: нэрээр нэгтгэнэ (одоо байгаа ID, гэрээ, хуваарь хадгалагдана)
+  const handleExcelImport = (raw: ExcelImportRaw): string[] => {
+    const merged = mergeExcelImport(
+      {
+        subjects: project.subjects,
+        teachers: project.teachers,
+        classrooms: project.classrooms,
+        classes: project.classes,
+        lessons: project.lessons,
+        buildings: project.settings.buildings || project.buildings || [],
+      },
+      raw
+    );
     setProject((prev) => ({
       ...prev,
-      subjects: data.subjects && data.subjects.length > 0 ? data.subjects : prev.subjects,
-      teachers: data.teachers && data.teachers.length > 0 ? data.teachers : prev.teachers,
-      classrooms: data.classrooms && data.classrooms.length > 0 ? data.classrooms : prev.classrooms,
-      classes: data.classes && data.classes.length > 0 ? data.classes : prev.classes,
+      subjects: merged.subjects,
+      teachers: merged.teachers,
+      classrooms: merged.classrooms,
+      classes: merged.classes,
+      lessons: merged.lessons,
     }));
+    return merged.messages;
   };
 
   const currentBuildings = project.settings.buildings || project.buildings || [];
@@ -399,6 +490,10 @@ export default function App() {
 
       {/* ГАНЦХАН НЭГДМЭЛ ЦЭС: Бүх үйлдэл нүүрний товчлуураар харагдана */}
       <SingleHeaderToolbar
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={past.current.length > 0}
+        canRedo={future.current.length > 0}
         onOpenSubjects={() => setDataDialogTab('subjects')}
         onOpenTeachers={() => setDataDialogTab('teachers')}
         onOpenClasses={() => setDataDialogTab('classes')}
@@ -463,11 +558,23 @@ export default function App() {
           buildings={currentBuildings}
           settings={project.settings}
           conflicts={conflicts}
+          lessons={project.lessons}
+          dockDragContractId={dockDragContractId}
           onMoveCard={handleMoveCard}
           onRemoveCard={handleRemoveCard}
           onToggleLock={handleToggleLock}
           onDropNewCard={handleDropNewCard}
+          onNotify={notify}
         />
+
+        {notice && (
+          <div
+            role="status"
+            className="absolute left-1/2 -translate-x-1/2 top-3 z-50 bg-[#2e2b26] text-[#fdfbf6] text-[12.5px] px-4 py-2 rounded-lg shadow-[0_6px_24px_rgba(46,43,38,0.25)] max-w-[560px] text-center"
+          >
+            {notice}
+          </div>
+        )}
 
         {/* Bottom Unplaced Cards Dock */}
         <BottomCardsDock
@@ -480,13 +587,14 @@ export default function App() {
           selectedClassId={viewMode === 'single_class' ? activeEntityId : undefined}
           selectedTeacherId={viewMode === 'single_teacher' ? activeEntityId : undefined}
           activeManagerId={activeManagerId}
-          onCardDragStart={() => {}}
+          onCardDragStart={(id) => setDockDragContractId(id)}
+          onCardDragEnd={() => setDockDragContractId(null)}
           onQuickPlaceCard={handleQuickPlaceCard}
         />
       </div>
 
       {/* Bottom Status Bar (Classic Desktop Inset Panels) */}
-      <div className="bg-[#d8e2ed] border-t border-[#b2c2d4] px-3 py-1 flex items-center justify-between text-[11px] text-slate-700 select-none font-sans">
+      <div className="bg-[#e6e2da] border-t border-[#d6d1c6] px-3 py-1 flex items-center justify-between text-[11px] text-slate-700 select-none font-sans">
         <div className="flex items-center gap-2">
           <div className="asc-status-panel font-bold text-slate-900">
             {project.settings.schoolName} ({project.settings.academicYear})
@@ -504,12 +612,25 @@ export default function App() {
 
         <div className="flex items-center gap-2">
           {conflicts.length > 0 ? (
-            <button
-              onClick={() => setShowVerification(true)}
-              className="flex items-center gap-1 font-bold text-rose-700 bg-rose-100/90 border border-rose-300 px-2 py-0.5 rounded-xs hover:bg-rose-200 transition cursor-pointer"
-            >
-              <span>⚠️ {conflicts.length} зөрчил илэрсэн</span>
-            </button>
+            (() => {
+              const errorCount = conflicts.filter((c) => c.severity === 'error').length;
+              const warnCount = conflicts.length - errorCount;
+              return (
+                <button
+                  onClick={() => setShowVerification(true)}
+                  className={`flex items-center gap-1 font-bold px-2 py-0.5 rounded-xs transition cursor-pointer border ${
+                    errorCount > 0
+                      ? 'text-rose-700 bg-rose-100/90 border-rose-300 hover:bg-rose-200'
+                      : 'text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-200'
+                  }`}
+                  title="Шалгалтын жагсаалтыг нээх"
+                >
+                  <span>
+                    {errorCount > 0 ? `⚠️ ${errorCount} алдаа` : '✓ Хатуу зөрчилгүй'} · {warnCount} сануулга
+                  </span>
+                </button>
+              );
+            })()
           ) : (
             <div className="asc-status-panel text-emerald-700 font-semibold flex items-center gap-1">
               <span>✓ Хуваарь зөрчилгүй</span>
@@ -646,6 +767,10 @@ export default function App() {
           conflicts={conflicts}
           isOpen={showVerification}
           onClose={() => setShowVerification(false)}
+          onShowEntity={(type, id) => {
+            setViewMode(type === 'class' ? 'single_class' : type === 'teacher' ? 'single_teacher' : 'single_room');
+            setActiveEntityId(id);
+          }}
         />
       )}
 
@@ -682,7 +807,7 @@ export default function App() {
         onClose={() => setShowBackups(false)}
         onRestoreProject={(raw) => {
           const restored = normalizeProject(raw);
-          setProject(restored);
+          replaceProject(restored);
           saveProjectToStorage(restored);
           triggerAutoBackup(restored, true);
         }}

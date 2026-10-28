@@ -1,3 +1,4 @@
+import { classSlotCompatible, weeksOverlap } from '../utils/constraints';
 import React, { useState, useRef } from 'react';
 import {
   Teacher,
@@ -265,7 +266,16 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
 
   // Calculate Conflicts across all loaded slots
   const detectConflicts = (): MergeConflict[] => {
-    const activeSlots = slots.filter((s) => s.scheduledCards.length > 0);
+    const loaded = slots.filter((s) => s.scheduledCards.length > 0);
+    // Нэгтгэлд ороогүй багш нарын системд байгаа картууд мөн давхцал шалгалтад орно
+    const mergingTeacherIds = new Set(
+      slots.filter((s) => s.lessons.length > 0 || s.scheduledCards.length > 0 || s.teachers.length > 0).flatMap((s) => s.teachers.map((t) => t.id))
+    );
+    const systemCards = scheduledCards.filter((c) => !mergingTeacherIds.has(c.teacherId));
+    const activeSlots = [
+      ...(systemCards.length > 0 ? [{ managerName: 'Одоогийн хуваарь', scheduledCards: systemCards } as any] : []),
+      ...loaded,
+    ];
     const conflicts: MergeConflict[] = [];
 
     // Map: key = `${day}_${period}_${shift}_${teacherId}` -> Card
@@ -277,7 +287,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
       for (const card of slot.scheduledCards) {
         // 1. Teacher Clash
         const teacherKey = `${card.dayIndex}_${card.periodIndex}_${card.shift}_${card.teacherId}`;
-        if (teacherGrid.has(teacherKey)) {
+        if (teacherGrid.has(teacherKey) && weeksOverlap(teacherGrid.get(teacherKey)!.card.weekCycle, card.weekCycle)) {
           const existing = teacherGrid.get(teacherKey)!;
           const tObj = teachers.find((t) => t.id === card.teacherId);
           const dayName = settings.dayNames[card.dayIndex] || `${card.dayIndex + 1}-р өдөр`;
@@ -300,6 +310,31 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
           });
         } else {
           teacherGrid.set(teacherKey, { card, managerName: slot.managerName });
+        }
+
+        // 1б. Ангийн давхцал (өөр хуваалтын дэд бүлэг, бүхэл анги)
+        const classKey = `${card.dayIndex}_${card.periodIndex}_${card.shift}_${card.classId}`;
+        const prevClass = classGrid.get(classKey);
+        if (prevClass && prevClass.card.id !== card.id && !classSlotCompatible(classes, card.classId, prevClass.card, card) && weeksOverlap(prevClass.card.weekCycle, card.weekCycle)) {
+          const cObj = classes.find((c) => c.id === card.classId);
+          const dayName = settings.dayNames[card.dayIndex] || `${card.dayIndex + 1}-р өдөр`;
+          conflicts.push({
+            id: `clash_c_${classKey}`,
+            type: 'class_clash',
+            title: 'Ангийн давхцал',
+            description: `${cObj?.name || 'Анги'} ${dayName} гарагийн ${card.periodIndex + 1}-р цагт "${prevClass.managerName}" болон "${slot.managerName}"-ийн хуваарьт зэрэг хичээлтэй байна!`,
+            dayIndex: card.dayIndex,
+            periodIndex: card.periodIndex,
+            shift: card.shift,
+            entityId: card.classId,
+            entityName: cObj?.name || 'Анги',
+            existingCard: prevClass.card,
+            incomingCard: card,
+            incomingManagerName: slot.managerName,
+            resolution: conflictResolutions[`clash_c_${classKey}`] || 'keep_existing',
+          });
+        } else if (!prevClass) {
+          classGrid.set(classKey, { card, managerName: slot.managerName });
         }
 
         // 2. Room Clash (for non-shared rooms)
@@ -386,37 +421,29 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
       }
     }
 
-    // 4. Merge Scheduled Cards with Conflict Resolution
+    // 4. Хуваарийн картуудыг нэгтгэх: эхлээд бүгдийг цуглуулаад, дараа нь давхцлын шийдвэрийг хэрэгжүүлнэ
     const cardMap = new Map<string, ScheduledCard>();
-    const conflictingIncomingIds = new Set<string>();
+
+    // Нэгтгэлд ороогүй багш нарын системийн картууд хэвээр
+    const activeSlotTeacherIds = new Set(activeSlots.flatMap((s) => s.teachers.map((t) => t.id)));
+    for (const card of scheduledCards) {
+      if (!activeSlotTeacherIds.has(card.teacherId)) cardMap.set(card.id, card);
+    }
+    for (const slot of activeSlots) {
+      for (const card of slot.scheduledCards) cardMap.set(card.id, card);
+    }
 
     for (const conf of detectedConflicts) {
       const res = conflictResolutions[conf.id] || 'keep_existing';
       if (res === 'keep_existing') {
-        conflictingIncomingIds.add(conf.incomingCard.id);
+        cardMap.delete(conf.incomingCard.id);
       } else if (res === 'use_incoming') {
-        // remove existing
         cardMap.delete(conf.existingCard.id);
+        cardMap.set(conf.incomingCard.id, conf.incomingCard);
       } else if (res === 'both_to_dock') {
-        // discard both from grid (they become unscheduled cards in dock)
-        conflictingIncomingIds.add(conf.incomingCard.id);
+        // Хоёуланг нь хуваариас авч тавиурт буцаана
+        cardMap.delete(conf.incomingCard.id);
         cardMap.delete(conf.existingCard.id);
-      }
-    }
-
-    // Preserve existing system scheduled cards for teachers not part of this merge
-    const activeSlotTeacherIds = new Set(activeSlots.flatMap((s) => s.teachers.map((t) => t.id)));
-    for (const card of scheduledCards) {
-      if (!activeSlotTeacherIds.has(card.teacherId)) {
-        cardMap.set(card.id, card);
-      }
-    }
-
-    for (const slot of activeSlots) {
-      for (const card of slot.scheduledCards) {
-        if (!conflictingIncomingIds.has(card.id)) {
-          cardMap.set(card.id, card);
-        }
       }
     }
 
@@ -509,7 +536,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 select-none">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-6xl overflow-hidden flex flex-col h-[90vh]">
         {/* Header - Classic aSc Windows Title Bar */}
-        <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-blue-800 text-white px-4 py-2.5 flex items-center justify-between select-none shrink-0">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none shrink-0">
           <div className="flex items-center gap-2">
             <Share2 className="w-5 h-5 text-indigo-200" />
             <span className="font-bold text-sm tracking-wide">
@@ -525,7 +552,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
         </div>
 
         {/* Tab Navigation & Status Bar */}
-        <div className="bg-[#e9eff6] px-4 py-1.5 border-b border-slate-300 flex items-center justify-between text-xs shrink-0">
+        <div className="bg-[#f3f1ec] px-4 py-1.5 border-b border-slate-300 flex items-center justify-between text-xs shrink-0">
           <div className="flex items-center gap-1">
             <button
               onClick={() => setActiveTab('merge')}
@@ -576,7 +603,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
 
         {/* TAB 1: MERGE (ХУВААРЬ НЭГТГЭХ) */}
         {activeTab === 'merge' && (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#e8eef5]">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#f3f1ec]">
             {/* Guide Banner with Quick Actions */}
             <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-950 flex flex-col md:flex-row md:items-center justify-between gap-3">
               <div className="flex items-start gap-2.5">
@@ -779,7 +806,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
                           <div className="space-y-0.5">
                             <div className="font-bold text-rose-950 flex items-center gap-2">
                               <span className="px-1.5 py-0.5 bg-rose-200 text-rose-800 rounded text-[10px]">
-                                {conf.type === 'teacher_clash' ? 'Багшийн давхцал' : 'Танхимын давхцал'}
+                                {conf.type === 'teacher_clash' ? 'Багшийн давхцал' : conf.type === 'class_clash' ? 'Ангийн давхцал' : 'Танхимын давхцал'}
                               </span>
                               <span>{conf.entityName}</span>
                               <span className="text-slate-500 font-mono text-[11px]">
@@ -851,7 +878,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
 
         {/* TAB 2: EXPORT MY PACKAGE (МЕНЕЖЕРИЙН БАГЦ ТАТАХ) */}
         {activeTab === 'export' && (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#e8eef5]">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#f3f1ec]">
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-950 flex items-start gap-2.5">
               <Download className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <div>
@@ -1067,7 +1094,7 @@ export const ManagerExchangeDialog: React.FC<ManagerExchangeDialogProps> = ({
 
         {/* TAB 3: MANAGER SETTINGS & TEACHER ASSIGNMENTS */}
         {activeTab === 'settings' && (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#e8eef5] text-xs">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#f3f1ec] text-xs">
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-950 flex items-start gap-2.5">
               <Users className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
               <div>

@@ -171,7 +171,7 @@ export const SchoolSettingsDialog: React.FC<SchoolSettingsDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-3xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Title bar */}
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white px-4 py-2.5 flex items-center justify-between select-none">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none">
           <div className="flex items-center gap-2">
             <School className="w-4 h-4 text-sky-200" />
             <span className="font-semibold text-sm">
@@ -637,7 +637,7 @@ export const SchoolSettingsDialog: React.FC<SchoolSettingsDialogProps> = ({
       {showNamingModal && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/65 backdrop-blur-xs p-4">
           <div className="bg-white rounded-lg shadow-2xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white px-4 py-3 flex items-center justify-between">
+            <div className="dialog-titlebar text-white px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Save className="w-4 h-4 text-sky-200" />
                 <span className="font-bold text-sm">Хуваарийн төсөлд нэр өгч хадгалах</span>
