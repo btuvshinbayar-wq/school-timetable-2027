@@ -31,6 +31,7 @@ import {
 import { getDefaultSchoolSettings, DEFAULT_BUILDINGS, DEFAULT_RELATIONSHIPS, DEFAULT_MANAGERS } from './utils/defaultData';
 import { verifyTimetable } from './utils/generator';
 import { ensureIntegrity } from './utils/integrity';
+import { isDesktop } from './desktop';
 import { ExcelImportRaw, mergeExcelImport } from './utils/excelIO';
 import { applyMove, cardGroup, evaluateMove, evaluateNew, newCardsFromContract, EditContext } from './utils/manualEdit';
 
@@ -442,13 +443,16 @@ export default function App() {
     if (isInitialMandatory) {
       setAppInitialized(true);
       setIsInitialMandatory(false);
-      // Заавал JSON форматаар файл татаж хадгална
-      exportProjectToFile(updated, 'json', finalName);
-      // Суулгасан path орчны backups/ фолдерт огноо цаг минутын хуулбар үүсгэнэ
+      setShowSchoolSettings(false);
       triggerAutoBackup(updated, true);
-      alert(
-        `"${finalName}.json" төсөл амжилттай хадгалагдаж, тухайн программ суусан path орчны backups/ хавтаст autobackup үүслээ.`
-      );
+      if (isDesktop) {
+        // Десктоп: өгөгдөл программд хадгалагдаж, Documents-д автомат хуулбар үүснэ — файл заавал татуулахгүй
+        notify(`"${finalName}" төсөл хадгалагдлаа. Автомат хуулбар: Documents › School Timetable 2027 › backups`);
+      } else {
+        // Вэб: заавал JSON форматаар файл татаж хадгална
+        exportProjectToFile(updated, 'json', finalName);
+        alert(`"${finalName}.json" төсөл амжилттай хадгалагдаж, автомат хуулбар үүслээ.`);
+      }
     } else {
       triggerAutoBackup(updated);
     }

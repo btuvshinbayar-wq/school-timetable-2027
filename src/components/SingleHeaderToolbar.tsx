@@ -18,9 +18,10 @@ import {
   Calendar,
   RefreshCw,
   Share2,
-  Bell,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
+import { LicenseBadge } from './LicenseBadge';
+import { isDesktop } from '../desktop';
 import { WeekCycle, ManagerProfile } from '../types/timetable';
 
 interface SingleHeaderToolbarProps {
@@ -127,9 +128,7 @@ export const SingleHeaderToolbar: React.FC<SingleHeaderToolbarProps> = ({
       {/* 1. Header Top Line: Logo, Project Name, and PWA Install */}
       <div className="asc-window-titlebar px-3 py-1.5 flex items-center justify-between border-b border-[#d6d1c6] text-xs">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-[5px] bg-[#2f5d52] flex items-center justify-center shrink-0">
-            <Bell className="w-3 h-3 text-[#fdfbf6]" />
-          </div>
+          <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" className="w-5 h-5 shrink-0" draggable={false} />
           <span className="font-bold text-slate-800 text-xs tracking-tight">
             School timetable 2027
           </span>
@@ -140,7 +139,7 @@ export const SingleHeaderToolbar: React.FC<SingleHeaderToolbarProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          <PWAInstallButton />
+          {isDesktop ? <LicenseBadge /> : <PWAInstallButton />}
         </div>
       </div>
 
