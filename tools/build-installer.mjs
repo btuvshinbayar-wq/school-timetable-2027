@@ -6,7 +6,8 @@
  *   1. MAKENSIS орчны хувьсагч
  *   2. PATH дахь makensis (Windows дээр NSIS суулгасан бол)
  *   3. electron-builder-ийн кэш дэх NSIS (Linux/macOS/Windows)
- * Ажиллуулах: npm run dist:win
+ * Ажиллуулах: npm run dist:win          (Electron, release/win-unpacked)
+ *             npm run dist:win:lite     (Go + WebView2, release/win-lite) — `--lite`
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -16,9 +17,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-const src = join(root, 'release', 'win-unpacked');
+const lite = process.argv.includes('--lite');
+const src = join(root, 'release', lite ? 'win-lite' : 'win-unpacked');
 if (!existsSync(join(src, 'SchoolTimetable2027.exe'))) {
-  console.error('release/win-unpacked олдсонгүй. Эхлээд: npm run build:desktop && npx electron-builder --win dir --x64');
+  console.error(`${src} олдсонгүй. Эхлээд: ${lite ? 'npm run build:desktop && node tools/build-lite.mjs' : 'npm run build:desktop && npx electron-builder --win dir --x64'}`);
   process.exit(1);
 }
 
@@ -56,9 +58,9 @@ if (!makensis) {
   process.exit(1);
 }
 
-const out = join(root, 'release', `SchoolTimetable2027-Setup-${pkg.version}.exe`);
+const out = join(root, 'release', `SchoolTimetable2027-${lite ? 'Lite-' : ''}Setup-${pkg.version}.exe`);
 const sep = platform() === 'win32' ? '/' : '-';
-const args = [`${sep}DVERSION=${pkg.version}`, `${sep}DSRC_DIR=${src}`, `${sep}DOUT_FILE=${out}`, `${sep}V2`, join(root, 'build', 'installer.nsi')];
+const args = [`${sep}DVERSION=${pkg.version}`, `${sep}DSRC_DIR=${src}`, `${sep}DOUT_FILE=${out}`, ...(lite ? [`${sep}DLITE`] : []), `${sep}V2`, join(root, 'build', 'installer.nsi')];
 console.log(`makensis: ${makensis.bin}`);
 execFileSync(makensis.bin, args, {
   cwd: join(root, 'build'),

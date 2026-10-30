@@ -19,7 +19,9 @@
     "license:issue": "node tools/license/issue.mjs",
     "icons": "python3 tools/make-icons.py",
     "installer": "node tools/build-installer.mjs",
-    "installer-art": "python3 tools/make-installer-art.py"
+    "installer-art": "python3 tools/make-installer-art.py",
+    "dist:win:lite": "npm run build:desktop && node tools/build-lite.mjs && node tools/build-installer.mjs --lite",
+    "test:lite": "node -e \"require('fs').copyFileSync('electron/license-public.pem','desktop-lite/license-public.pem')\" && cd desktop-lite && go test -mod=vendor ./"
   },
   "devDependencies": {
     "@fontsource/golos-text": "^5.3.0",

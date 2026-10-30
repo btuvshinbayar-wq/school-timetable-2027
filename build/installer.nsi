@@ -100,6 +100,20 @@ Function .onInit
   ${EndIf}
   SetRegView 64
   !insertmacro CheckRunning "${PRODUCT} ажиллаж байна. Программаа хаагаад «Дахин оролдох» товчийг дарна уу."
+!ifdef LITE
+  ; Хөнгөн хувилбар Microsoft Edge WebView2-оор ажиллана (Windows 11-д суусан, Windows 10-д ихэвчлэн суусан)
+  ReadRegStr $1 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  ${If} $1 == ""
+  ${OrIf} $1 == "0.0.0.0"
+    ReadRegStr $1 HKCU "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  ${EndIf}
+  ${If} $1 == ""
+  ${OrIf} $1 == "0.0.0.0"
+    MessageBox MB_YESNO|MB_ICONINFORMATION "Энэ компьютерт Microsoft Edge WebView2 суугаагүй бололтой. Программ ажиллахад шаардлагатай.$\r$\n$\r$\nMicrosoft-ийн албан ёсны татах хуудсыг одоо нээх үү? (Суулгалт үргэлжилнэ.)" /SD IDNO IDNO wv2_skip
+    ExecShell "open" "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    wv2_skip:
+  ${EndIf}
+!endif
 FunctionEnd
 
 Function CreateDesktopShortcut
@@ -112,12 +126,12 @@ Section "Install"
   SetRegView 64
   SetShellVarContext all
 
-  ; Өмнөх хувилбарын программын файлуудыг цэвэрлэнэ (хэрэглэгчийн өгөгдөл AppData-д тул хөндөгдөхгүй)
+  ; Өмнөх хувилбарыг (бүрэн эсвэл хөнгөн) чимээгүй устгана — хэрэглэгчийн өгөгдөл, лиценз AppData-д тул хөндөгдөхгүй
   ReadRegStr $0 HKLM "${UNINST_KEY}" "InstallLocation"
   ${If} $0 != ""
-  ${AndIf} ${FileExists} "$0\${EXE}"
-    RMDir /r "$0\resources"
-    RMDir /r "$0\locales"
+  ${AndIf} ${FileExists} "$0\Uninstall.exe"
+    ExecWait '"$0\Uninstall.exe" /S _?=$0'
+    RMDir /r "$0"
   ${EndIf}
 
   SetOutPath "$INSTDIR"
@@ -164,6 +178,7 @@ Section "Uninstall"
   ${IfNot} ${Silent}
     MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Энэ хэрэглэгчийн хуваарийн өгөгдөл болон лицензийг мөн устгах уу?$\r$\n$\r$\n«Үгүй» гэвэл дахин суулгахад бүх зүйл хэвээр үлдэнэ. Documents\School Timetable 2027\backups хавтас дахь хуулбарууд ямар ч тохиолдолд устахгүй." IDNO keep_data
     RMDir /r "$APPDATA\${APPDATA_DIR}"
+    RMDir /r "$LOCALAPPDATA\${APPDATA_DIR}"
   ${EndIf}
   keep_data:
 SectionEnd
