@@ -398,9 +398,14 @@ export const SingleHeaderToolbar: React.FC<SingleHeaderToolbarProps> = ({
         {/* Right Info Indicator */}
         <div className="flex items-center gap-2 text-slate-600 text-[11px]">
           {lastBackupTime && (
-            <span className="hidden sm:inline font-mono text-[10px] bg-white/80 px-1.5 py-0.5 rounded border border-[#d6d1c6]">
+            <button
+              type="button"
+              onClick={onOpenBackups}
+              title="Автомат нөөц хуулбарууд — үзэх, сэргээх"
+              className="hidden sm:inline font-mono text-[10px] bg-white/80 px-1.5 py-0.5 rounded border border-[#d6d1c6] hover:bg-white hover:border-[#b9b2a3] cursor-pointer"
+            >
               💾 Backup: {lastBackupTime.includes(' ') ? lastBackupTime.split(' ')[1] : lastBackupTime}
-            </span>
+            </button>
           )}
         </div>
       </div>
