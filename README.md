@@ -76,3 +76,27 @@ npm run dist:win   # → release/SchoolTimetable2027-Setup-<хувилбар>.ex
 `SchoolTimetable2027.exe`-д гарын үсэг зурна.
 
 Тест: `npm run build:desktop && xvfb-run -a node tests/desktop.e2e.cjs`
+
+### Хөнгөн хувилбар (Electron-гүй, ~2 MB суулгагч)
+
+```bash
+npm run dist:win:lite   # → release/SchoolTimetable2027-Lite-Setup-<хувилбар>.exe
+```
+
+| | Бүрэн (Electron) | Хөнгөн (Go + WebView2) |
+|---|---|---|
+| Суулгагч | ~107 MB | **~2 MB** |
+| Суусны дараа | ~300 MB | ~6 MB |
+| Хөдөлгүүр | Chromium программд багтсан | Windows 10/11-ийн Microsoft Edge WebView2 |
+
+- `desktop-lite/` — Go программ: цонх (WebView2), `window.desktop` гүүр (`bridge.js`), лиценз (`license.go`), нөөц хуулбар.
+  Сангууд `desktop-lite/vendor`-д багтсан тул интернэтгүй бүтээгдэнэ (Go 1.22+ шаардлагатай).
+- **Лиценз бүрэн хувилбартай яг ижил**: ижил түлхүүрийн хэлбэр, машины код, `npm run license:issue`, ижил `license.lic` файл —
+  өмнө олгосон лицензүүд хэвээр ажиллана, хоёр хувилбарын хооронд шилжихэд дахин идэвхжүүлэх шаардлагагүй.
+- Хуваарийн өгөгдөл: `%LOCALAPPDATA%\School Timetable 2027\WebView2` (бүрэн хувилбараас тусдаа — шилжихдээ «Хадгалах»-аар файлд
+  гаргаад «Нээх»-ээр оруулна; нөөц хуулбарууд `Documents` дотор хоёуланд нь харагдана).
+- WebView2 Windows 11-д суусан, Windows 10-д Edge-ийн шинэчлэлээр ихэвчлэн суусан байдаг. Байхгүй бол суулгагч болон программ
+  Microsoft-ийн албан ёсны татах хуудсыг санал болгоно.
+- Суулгагч өмнөх хувилбарыг (бүрэн эсвэл хөнгөн) өөрөө солино; лиценз хадгалагдана.
+
+Тест: `npm run test:lite` (Go ↔ Node лицензийн нийцэл) ба `npm run build:desktop && node tools/build-lite.mjs && node tests/lite.e2e.cjs`

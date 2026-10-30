@@ -51,7 +51,7 @@ const head = `STT1.${b64url(JSON.stringify(payload))}`;
 const sig = sign(null, Buffer.from(head), createPrivateKey(readFileSync(keyPath)));
 const key = `${head}.${b64url(sig)}`;
 
-const logPath = join(root, 'license-keys', 'issued.csv');
+const logPath = process.env.STT_ISSUE_LOG || join(root, 'license-keys', 'issued.csv');
 mkdirSync(dirname(logPath), { recursive: true });
 if (!existsSync(logPath)) appendFileSync(logPath, '﻿id,issued,licensee,machine,expires,edition,note\n');
 const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;

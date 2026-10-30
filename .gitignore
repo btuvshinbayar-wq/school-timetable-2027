@@ -14,3 +14,6 @@ license-keys/
 # Electron бүтээлт
 dist-desktop/
 release/
+
+# Хөнгөн хувилбарт бүтээх үед хуулагдана
+desktop-lite/license-public.pem
