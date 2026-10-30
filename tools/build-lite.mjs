@@ -6,7 +6,7 @@
  * Дараа нь: node tools/build-installer.mjs --lite
  * Бүгдийг нэг дор: npm run dist:win:lite
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,12 @@ for (const f of ['activation.html', 'activation.css', 'activation.js']) {
 
 // Нийтийн түлхүүрийг Go программд шингээнэ (license:keygen-ээр солигдвол дахин бүтээхэд л хангалттай)
 copyFileSync(join(root, 'electron', 'license-public.pem'), join(root, 'desktop-lite', 'license-public.pem'));
+
+const goCheck = spawnSync('go', ['version'], { encoding: 'utf8', shell: process.platform === 'win32' });
+if (goCheck.status !== 0) {
+  console.error('Go олдсонгүй. Суулгаад терминалаа дахин нээнэ үү:  winget install GoLang.Go   (эсвэл https://go.dev/dl)');
+  process.exit(1);
+}
 
 const exe = join(out, 'SchoolTimetable2027.exe');
 console.log('go build (windows/amd64)…');

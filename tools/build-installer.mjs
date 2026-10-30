@@ -33,8 +33,9 @@ function findCachedNsis() {
   ].filter(Boolean);
   for (const c of caches) {
     if (!existsSync(c)) continue;
-    for (const d of readdirSync(c).filter((x) => x.startsWith('nsis-') && !x.includes('resources'))) {
-      const base = join(c, d);
+    const roots = [c, join(c, 'nsis')].filter((r) => existsSync(r));
+    for (const [r, d] of roots.flatMap((r) => readdirSync(r).filter((x) => x.startsWith('nsis-') && !x.includes('resources')).map((d) => [r, d]))) {
+      const base = join(r, d);
       for (const inner of readdirSync(base)) {
         const dir = join(base, inner);
         if (!statSync(dir).isDirectory()) continue;
@@ -52,9 +53,19 @@ if (!makensis) {
   const which = spawnSync(platform() === 'win32' ? 'where' : 'which', ['makensis'], { encoding: 'utf8' });
   if (which.status === 0 && which.stdout.trim()) makensis = { bin: which.stdout.trim().split(/\r?\n/)[0] };
 }
+if (!makensis && platform() === 'win32') {
+  // NSIS-ийн ердийн суулгалт (winget install NSIS.NSIS)
+  for (const base of [process.env['ProgramFiles(x86)'], process.env.ProgramFiles].filter(Boolean)) {
+    const bin = join(base, 'NSIS', 'makensis.exe');
+    if (existsSync(bin)) {
+      makensis = { bin };
+      break;
+    }
+  }
+}
 if (!makensis) makensis = findCachedNsis();
 if (!makensis) {
-  console.error('makensis олдсонгүй. NSIS суулгах (https://nsis.sourceforge.io) эсвэл MAKENSIS=<зам> өгнө үү.');
+  console.error('makensis олдсонгүй. NSIS суулгана уу:  winget install NSIS.NSIS   (эсвэл https://nsis.sourceforge.io, эсвэл MAKENSIS=<зам>)');
   process.exit(1);
 }
 
