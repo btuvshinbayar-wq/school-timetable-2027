@@ -8,7 +8,7 @@ import {
   ScheduledCard,
   SchoolSettings,
 } from '../types/timetable';
-import { exportTimetableToExcel, downloadExcelTemplate, importExcelFile } from '../utils/excelIO';
+import { exportTimetableToExcel, downloadExcelTemplate, importExcelFile, ExcelImportRaw } from '../utils/excelIO';
 import { FileSpreadsheet, Download, Upload, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface ExcelImportExportDialogProps {
@@ -20,12 +20,8 @@ interface ExcelImportExportDialogProps {
   settings: SchoolSettings;
   isOpen: boolean;
   onClose: () => void;
-  onImportData: (data: {
-    subjects?: Subject[];
-    teachers?: Teacher[];
-    classrooms?: Classroom[];
-    classes?: ClassGroup[];
-  }) => void;
+  /** Түүхий мөрүүдийг App нэрээр нэгтгэж, мэдэгдлийн мөрүүдийг буцаана */
+  onImportData: (raw: ExcelImportRaw) => string[];
 }
 
 export const ExcelImportExportDialog: React.FC<ExcelImportExportDialogProps> = ({
@@ -61,14 +57,8 @@ export const ExcelImportExportDialog: React.FC<ExcelImportExportDialogProps> = (
     setImportLog([]);
 
     try {
-      const result = await importExcelFile(file);
-      setImportLog(result.messages);
-      onImportData({
-        subjects: result.subjects,
-        teachers: result.teachers,
-        classrooms: result.classrooms,
-        classes: result.classes,
-      });
+      const raw = await importExcelFile(file);
+      setImportLog(onImportData(raw));
     } catch (err: any) {
       setImportLog([`❌ Алдаа: ${err?.message || err}`]);
     } finally {
@@ -81,7 +71,7 @@ export const ExcelImportExportDialog: React.FC<ExcelImportExportDialogProps> = (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-xl overflow-hidden flex flex-col">
         {/* Title bar */}
-        <div className="bg-gradient-to-r from-emerald-700 to-teal-800 text-white px-4 py-2.5 flex items-center justify-between select-none">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none">
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
             <span className="font-semibold text-sm">Excel Импорт & Экспорт (Excel Data Center)</span>

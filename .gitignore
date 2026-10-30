@@ -1,8 +1,19 @@
 node_modules/
-build/
 dist/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+
+# Хөгжүүлэлтийн серверийн автомат хуулбарууд
+backups/backup_*.json
+
+# Лицензийн хувийн түлхүүр, олгосон лицензийн бүртгэл — ХЭЗЭЭ Ч GIT-Д ОРУУЛАХГҮЙ
+license-keys/
+# Electron бүтээлт
+dist-desktop/
+release/
+
+# Хөнгөн хувилбарт бүтээх үед хуулагдана
+desktop-lite/license-public.pem

@@ -1,3 +1,4 @@
+import { desktop } from '../desktop';
 import React, { useState, useEffect } from 'react';
 import { History, Download, RefreshCw, AlertCircle, HardDrive, CheckCircle2 } from 'lucide-react';
 import { BackupItem, listServerBackups, loadServerBackup, ProjectState, triggerAutoBackup } from '../utils/storage';
@@ -23,14 +24,19 @@ export const BackupsDialog: React.FC<BackupsDialogProps> = ({
   const fetchList = async () => {
     setLoading(true);
     try {
+      if (desktop) {
+        setBackups(await listServerBackups());
+        setBackupPath((await desktop.app.info()).backupsDir);
+        return;
+      }
       const res = await fetch('/api/backup/list');
-      if (res.ok) {
+      if (res.ok && (res.headers.get('content-type') || '').includes('json')) {
         const data = await res.json();
-        setBackups(data.backups || []);
+        setBackups([...(data.backups || []), ...(await listServerBackups()).filter((b) => b.filename.startsWith('local:'))]);
         if (data.path) setBackupPath(data.path);
       } else {
-        const list = await listServerBackups();
-        setBackups(list);
+        setBackups(await listServerBackups());
+        setBackupPath('Энэ хөтчийн дотор (IndexedDB)');
       }
     } catch (err) {
       console.error(err);
@@ -97,10 +103,10 @@ export const BackupsDialog: React.FC<BackupsDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="bg-slate-800 text-white px-4 py-2.5 flex items-center justify-between select-none border-b border-slate-700">
+        <div className="dialog-titlebar px-4 py-2.5 flex items-center justify-between select-none border-b border-[#264b42]">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-emerald-400" />
-            <span className="font-semibold text-sm">Авто-хуулбарын удирдлага (Autobackup)</span>
+            <span className="font-semibold text-sm">Автомат нөөц хуулбар</span>
           </div>
           <button
             onClick={onClose}
@@ -115,10 +121,14 @@ export const BackupsDialog: React.FC<BackupsDialogProps> = ({
           <div className="flex items-center gap-2">
             <HardDrive className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>
-              <strong>Суусан path орчны хавтас:</strong>{' '}
-              <code className="bg-emerald-100/80 px-1 py-0.5 rounded text-[11px] font-mono">
-                {backupPath || './backups/'}
-              </code>
+              <strong>Хуулбарын байршил:</strong>{' '}
+              {desktop ? (
+                <button onClick={() => desktop!.backup.openFolder()} className="underline underline-offset-2 text-[11px]" title="Хавтсыг нээх">
+                  {backupPath}
+                </button>
+              ) : (
+                <code className="bg-emerald-100/80 px-1 py-0.5 rounded text-[11px]">{backupPath || './backups/'}</code>
+              )}
             </span>
           </div>
           <button
@@ -141,8 +151,7 @@ export const BackupsDialog: React.FC<BackupsDialogProps> = ({
         {/* List content */}
         <div className="p-4 flex-1 overflow-y-auto">
           <p className="text-xs text-slate-600 mb-3">
-            Хуваарийн программ дээр өөрчлөлт оруулах бүрд систем автоматаар огноо, цаг минут бүхий autobackup файлыг
-            программ суусан path орчны <code>backups/</code> фолдерт .json форматаар үүсгэж хадгалдаг.
+            Өөрчлөлт оруулах бүрд огноо, цаг минуттай хуулбар .json файлаар автоматаар хадгалагдана (сүүлийн 300).
           </p>
 
           {loading && backups.length === 0 ? (

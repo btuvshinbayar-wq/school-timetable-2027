@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="mn">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'" />
+    <title>School Timetable 2027 — идэвхжүүлэх</title>
+    <link rel="stylesheet" href="__activation.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header>
+        <img src="icon.svg" alt="" width="56" height="56" />
+        <div>
+          <h1>School Timetable 2027</h1>
+          <p class="muted">Хичээлийн хуваарь зохиох программ</p>
+        </div>
+      </header>
+
+      <div id="state" class="state" hidden></div>
+
+      <section>
+        <h2>1. Энэ компьютерын код</h2>
+        <p class="muted">Кодоо лиценз нийлүүлэгчид илгээнэ үү. Лиценз зөвхөн энэ компьютерт хүчинтэй байна.</p>
+        <div class="code-row">
+          <output id="machine" class="code">····-····-····-····</output>
+          <button id="copy" type="button" class="secondary">Хуулах</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. Лицензийн түлхүүр</h2>
+        <textarea id="key" rows="4" spellcheck="false" placeholder="STT1.… хэлбэрийн түлхүүрээ энд буулгана уу"></textarea>
+        <div class="actions">
+          <button id="activate" type="button" class="primary">Идэвхжүүлэх</button>
+          <button id="file" type="button" class="secondary">Лицензийн файл нээх</button>
+        </div>
+        <p id="message" class="message" role="status"></p>
+      </section>
+
+      <section id="export-box" hidden>
+        <h2>Өгөгдлөө хадгалах</h2>
+        <p class="muted">Лиценз идэвхгүй байсан ч оруулсан хуваарь, мэдээллээ файлаар хадгалж авч болно.</p>
+        <button id="export" type="button" class="secondary">Төслийг файлаар хадгалах</button>
+      </section>
+
+      <footer class="muted" id="contact"></footer>
+    </main>
+    <script src="__activation.js"></script>
+  </body>
+</html>

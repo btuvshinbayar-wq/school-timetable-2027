@@ -148,7 +148,7 @@ export const LessonsDialog: React.FC<LessonsDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 select-none">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Title bar */}
-        <div className="bg-gradient-to-r from-pink-700 to-rose-700 text-white px-4 py-2 flex items-center justify-between select-none">
+        <div className="dialog-titlebar text-white px-4 py-2 flex items-center justify-between select-none">
           <div className="flex items-center gap-2">
             <Layers className="w-4 h-4 text-pink-200" />
             <span className="font-semibold text-sm">Хичээл & Цагийн хуваарилалт</span>
@@ -382,7 +382,7 @@ export const LessonsDialog: React.FC<LessonsDialogProps> = ({
       {editingLesson && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-lg shadow-xl border border-slate-300 w-full max-w-lg overflow-hidden animate-in fade-in">
-            <div className="bg-gradient-to-r from-pink-700 to-rose-700 text-white px-4 py-2.5 text-sm font-semibold flex justify-between">
+            <div className="dialog-titlebar text-white px-4 py-2.5 text-sm font-semibold flex justify-between">
               <span>{isNew ? 'Шинэ хичээл үүсгэх' : 'Хичээлийн тохиргоо засварлах'}</span>
               <button onClick={() => setEditingLesson(null)} className="text-white hover:text-red-200">
                 ✕
@@ -635,7 +635,7 @@ export const LessonsDialog: React.FC<LessonsDialogProps> = ({
       {showCopyModal && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-lg shadow-xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in">
-            <div className="bg-gradient-to-r from-purple-700 to-indigo-700 text-white px-4 py-2.5 text-sm font-semibold flex justify-between">
+            <div className="dialog-titlebar text-white px-4 py-2.5 text-sm font-semibold flex justify-between">
               <span>Хичээлийн цагийн тохиргоог өөр ангид хуулах</span>
               <button onClick={() => setShowCopyModal(false)} className="text-white hover:text-purple-200">
                 ✕

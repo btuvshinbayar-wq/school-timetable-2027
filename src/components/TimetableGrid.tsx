@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Subject,
   Teacher,
@@ -10,38 +10,64 @@ import {
   ConflictIssue,
   WeekCycle,
   ManagerProfile,
+  LessonContract,
 } from '../types/timetable';
-import { Lock, Unlock, Trash2 } from 'lucide-react';
+import { Lock, Unlock, Trash2, X } from 'lucide-react';
 import { getTimeOffStatus } from '../utils/constraints';
+import { EditContext, evaluateMove, evaluateNew, MoveStatus, newCardsFromContract } from '../utils/manualEdit';
+
+type ViewMode = 'whole_classes' | 'whole_teachers' | 'single_class' | 'single_teacher' | 'single_room';
 
 interface TimetableGridProps {
-  viewMode: 'whole_classes' | 'whole_teachers' | 'single_class' | 'single_teacher' | 'single_room';
+  viewMode: ViewMode;
   onChangeViewMode?: (mode: any) => void;
   activeEntityId: string;
   onChangeActiveEntityId?: (id: string) => void;
   activeManagerId?: string;
   managers?: ManagerProfile[];
-  activeShift: number; // 0 = all, 1, 2, 3
-  activeWeekCycle: WeekCycle; // all, week_a, week_b
+  activeShift: number; // 0 = бүх ээлж
+  activeWeekCycle: WeekCycle;
   scheduledCards: ScheduledCard[];
   subjects: Subject[];
   teachers: Teacher[];
   classes: ClassGroup[];
   classrooms: Classroom[];
   buildings: Building[];
+  lessons: LessonContract[];
   settings: SchoolSettings;
   conflicts: ConflictIssue[];
-  onMoveCard: (cardId: string, targetDay: number, targetPeriod: number, targetClassId?: string) => void;
+  /** Тавиураас чирж буй гэрээ (тавиур дээр dragstart-аар тохируулна) */
+  dockDragContractId?: string | null;
+  onMoveCard: (cardId: string, targetDay: number, targetPeriod: number) => void;
   onRemoveCard: (cardId: string) => void;
   onToggleLock: (cardId: string) => void;
-  onDropNewCard: (contractId: string, day: number, period: number, classId?: string) => void;
+  onDropNewCard: (contractId: string, day: number, period: number) => void;
+  onNotify?: (message: string) => void;
+}
+
+/** Нэг баганын (цаг) тодорхойлолт */
+interface Col {
+  shift: number;
+  period: number;
+  label: string;
+  time: string;
+}
+
+const PAPER = '#fffdf9';
+
+function cardStyle(color: string | undefined): React.CSSProperties {
+  const c = color || '#857d70';
+  return {
+    background: `color-mix(in srgb, ${c} 15%, ${PAPER})`,
+    borderColor: `color-mix(in srgb, ${c} 42%, #d6d1c6)`,
+    boxShadow: `inset 2px 0 0 color-mix(in srgb, ${c} 55%, #fffdf9)`,
+  };
 }
 
 export const TimetableGrid: React.FC<TimetableGridProps> = ({
   viewMode,
   onChangeViewMode,
   activeEntityId,
-  onChangeActiveEntityId,
   activeManagerId,
   managers,
   activeShift,
@@ -51,441 +77,519 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
   teachers,
   classes,
   classrooms,
-  buildings,
+  lessons,
   settings,
   conflicts,
+  dockDragContractId,
   onMoveCard,
   onRemoveCard,
   onToggleLock,
   onDropNewCard,
+  onNotify,
 }) => {
-  const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
-  const [hoveredSlot, setHoveredSlot] = useState<{ day: number; period: number; entityId?: string } | null>(null);
-  const [selectedRowEntityId, setSelectedRowEntityId] = useState<string | null>(
-    viewMode === 'whole_teachers' ? (teachers[6]?.id || teachers[0]?.id || null) : (classes[0]?.id || null)
-  );
-  const [selectedPeriodCol, setSelectedPeriodCol] = useState<{ day: number; period: number } | null>({ day: 1, period: 3 });
+  const [dragCardId, setDragCardId] = useState<string | null>(null);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
 
-  const subMap = new Map(subjects.map((s) => [s.id, s]));
-  const teachMap = new Map(teachers.map((t) => [t.id, t]));
-  const clsMap = new Map(classes.map((c) => [c.id, c]));
-  const roomMap = new Map(classrooms.map((r) => [r.id, r]));
-  const bldMap = new Map(buildings.map((b) => [b.id, b]));
+  const subMap = useMemo(() => new Map(subjects.map((s) => [s.id, s])), [subjects]);
+  const teachMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
+  const clsMap = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes]);
+  const roomMap = useMemo(() => new Map(classrooms.map((r) => [r.id, r])), [classrooms]);
 
-  // Shift config for periods & bells
-  const shiftConfig = settings.shifts.find((s) => s.shiftNumber === (activeShift || 1)) || settings.shifts[0];
-  const bells = shiftConfig?.bells || [];
-  const periodsCount = shiftConfig?.periodsCount || 7;
+  const editCtx: EditContext = useMemo(
+    () => ({ settings, subjects, teachers, classes, classrooms, lessons }),
+    [settings, subjects, teachers, classes, classrooms, lessons]
+  );
 
-  // Filter scheduled cards based on week cycle
-  const filteredCards = scheduledCards.filter((c) => {
-    if (activeWeekCycle === 'week_a') {
-      return c.weekCycle === 'all' || c.weekCycle === 'week_a';
+  const errorCards = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of conflicts) if (c.severity === 'error') c.cardIds?.forEach((id) => s.add(id));
+    return s;
+  }, [conflicts]);
+
+  const shiftsInUse = useMemo(() => {
+    const count = Math.max(1, settings.shiftsCount || settings.shifts.length);
+    return settings.shifts.slice(0, count);
+  }, [settings]);
+  const shiftConf = (sh: number) => settings.shifts.find((s) => s.shiftNumber === sh) || settings.shifts[0];
+
+  const filteredCards = useMemo(
+    () =>
+      scheduledCards.filter((c) =>
+        activeWeekCycle === 'all' ? true : c.weekCycle === 'all' || c.weekCycle === activeWeekCycle
+      ),
+    [scheduledCards, activeWeekCycle]
+  );
+
+  // ---------------- Баганууд ----------------
+  const multiShiftTimeline = (): Col[] => {
+    const list = activeShift ? [shiftConf(activeShift)] : shiftsInUse;
+    const cols: (Col & { start: string })[] = [];
+    for (const sh of list) {
+      for (let p = 0; p < sh.periodsCount; p++) {
+        const bell = sh.bells[p];
+        cols.push({
+          shift: sh.shiftNumber,
+          period: p,
+          label: list.length > 1 ? `${sh.shiftNumber}·${p + 1}` : `${p + 1}`,
+          time: bell ? `${bell.startTime}–${bell.endTime}` : '',
+          start: bell?.startTime || `${sh.shiftNumber}${p}`,
+        });
+      }
     }
-    if (activeWeekCycle === 'week_b') {
-      return c.weekCycle === 'all' || c.weekCycle === 'week_b';
-    }
-    return true;
-  });
-
-  const handleDragOver = (e: React.DragEvent, day: number, period: number, entityId?: string) => {
-    e.preventDefault();
-    setHoveredSlot({ day, period, entityId });
-  };
-
-  const handleDragLeave = () => {
-    setHoveredSlot(null);
-  };
-
-  const handleDrop = (e: React.DragEvent, day: number, period: number, targetClassId?: string) => {
-    e.preventDefault();
-    setHoveredSlot(null);
-
-    const contractIdFromDock = e.dataTransfer.getData('text/plain');
-
-    if (draggedCardId) {
-      onMoveCard(draggedCardId, day, period, targetClassId);
-      setDraggedCardId(null);
-    } else if (contractIdFromDock) {
-      onDropNewCard(contractIdFromDock, day, period, targetClassId);
-    }
+    return cols.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : a.shift - b.shift));
   };
 
   const isWholeClasses = viewMode === 'whole_classes';
   const isWholeTeachers = viewMode === 'whole_teachers';
   const isMasterGrid = isWholeClasses || isWholeTeachers;
 
-  const currentMgr = managers?.find((m) => m.id === activeManagerId);
-  const filteredTeachers = teachers.filter((t) => {
-    if (activeManagerId && activeManagerId !== 'all') {
-      return t.managerId === activeManagerId;
+  const masterCols: Col[] = useMemo(() => {
+    if (isWholeClasses) {
+      // Анги бүр нэг ээлжтэй: цагийн дугаараар зэрэгцүүлнэ
+      const list = activeShift ? [shiftConf(activeShift)] : shiftsInUse;
+      const max = Math.max(...list.map((s) => s.periodsCount));
+      const one = list.length === 1 ? list[0] : null;
+      return Array.from({ length: max }, (_, p) => ({
+        shift: one?.shiftNumber || 0,
+        period: p,
+        label: `${p + 1}`,
+        time: one?.bells[p] ? `${one.bells[p].startTime}–${one.bells[p].endTime}` : '',
+      }));
     }
-    return true;
-  });
+    return multiShiftTimeline();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, activeShift, settings]);
 
-  // Filter classes by activeShift and activeManagerId if specified
+  // ---------------- Мөрүүд ----------------
+  const currentMgr = managers?.find((m) => m.id === activeManagerId);
+  const filteredTeachers = teachers.filter((t) =>
+    activeManagerId && activeManagerId !== 'all' ? t.managerId === activeManagerId : true
+  );
   const filteredClasses = classes.filter((c) => {
     if (activeShift !== 0 && c.shift !== activeShift) return false;
     if (activeManagerId && activeManagerId !== 'all') {
       if (c.managerId === activeManagerId) return true;
-      if (currentMgr?.assignedGrades && currentMgr.assignedGrades.includes(c.grade)) return true;
+      if (currentMgr?.assignedGrades?.includes(c.grade)) return true;
       return false;
     }
     return true;
   });
+  const rowEntities: (ClassGroup | Teacher)[] = isWholeClasses
+    ? [...filteredClasses].sort((a, b) => (a.shift || 1) - (b.shift || 1))
+    : filteredTeachers;
 
-  const rowEntities = isWholeClasses ? filteredClasses : filteredTeachers;
+  // ---------------- Картын индекс ----------------
+  const index = useMemo(() => {
+    const m = new Map<string, ScheduledCard[]>();
+    const push = (k: string, c: ScheduledCard) => {
+      const l = m.get(k);
+      if (l) l.push(c);
+      else m.set(k, [c]);
+    };
+    const lessonById = new Map(lessons.map((l) => [l.id, l]));
+    for (const c of filteredCards) {
+      const l = lessonById.get(c.contractId);
+      const joint = c.jointClassIds || l?.jointClassIds || [];
+      const co = c.coTeacherIds || l?.coTeacherIds || [];
+      for (const cl of [c.classId, ...joint]) push(`c|${cl}|${c.dayIndex}|${c.periodIndex}`, c);
+      for (const t of [c.teacherId, ...co]) push(`t|${t}|${c.dayIndex}|${c.shift}|${c.periodIndex}`, c);
+      if (c.classroomId) push(`r|${c.classroomId}|${c.dayIndex}|${c.shift}|${c.periodIndex}`, c);
+    }
+    return m;
+  }, [filteredCards, lessons]);
+
+  const classCell = (cid: string, d: number, p: number) => index.get(`c|${cid}|${d}|${p}`) || [];
+  const teacherCell = (tid: string, d: number, col: Col) => index.get(`t|${tid}|${d}|${col.shift}|${col.period}`) || [];
+  const roomCell = (rid: string, d: number, col: Col) => index.get(`r|${rid}|${d}|${col.shift}|${col.period}`) || [];
+
+  // ---------------- Чирэх үеийн нүдний төлөв ----------------
+  const dragCard = dragCardId ? scheduledCards.find((c) => c.id === dragCardId) : undefined;
+  const dockContract = !dragCardId && dockDragContractId ? lessons.find((l) => l.id === dockDragContractId) : undefined;
+
+  /** Чирж буй картын харьяа мөрийн нүд бүрийн төлөв (ногоон/шар/улаан) */
+  const dropStatus = useMemo(() => {
+    const m = new Map<string, { status: MoveStatus; reason?: string }>();
+    const days = settings.daysPerWeek;
+    if (dragCard) {
+      const per = shiftConf(dragCard.shift).periodsCount;
+      for (let d = 0; d < days; d++)
+        for (let p = 0; p < per; p++) {
+          const v = evaluateMove(editCtx, scheduledCards, dragCard.id, d, p);
+          m.set(`${d}|${dragCard.shift}|${p}`, v);
+        }
+    } else if (dockContract) {
+      const cls = clsMap.get(dockContract.classId);
+      const sh = cls?.shift || 1;
+      for (let d = 0; d < days; d++)
+        for (let p = 0; p < shiftConf(sh).periodsCount; p++) {
+          const v = evaluateNew(editCtx, scheduledCards, newCardsFromContract(dockContract, cls, scheduledCards, d, p));
+          m.set(`${d}|${sh}|${p}`, v);
+        }
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragCardId, dockContract?.id, scheduledCards, editCtx]);
+
+  const dragOwnerRow = dragCard
+    ? isWholeTeachers || viewMode === 'single_teacher'
+      ? dragCard.teacherId
+      : viewMode === 'single_room'
+        ? dragCard.classroomId
+        : dragCard.classId
+    : dockContract
+      ? isWholeTeachers || viewMode === 'single_teacher'
+        ? dockContract.teacherId
+        : dockContract.classId
+      : null;
+  const dragShift = dragCard?.shift ?? (dockContract ? clsMap.get(dockContract.classId)?.shift || 1 : null);
+
+  const cellDropClass = (rowId: string | undefined, d: number, sh: number, p: number) => {
+    if (!dragOwnerRow || rowId !== dragOwnerRow) return '';
+    if (sh && dragShift && sh !== dragShift) return '';
+    const v = dropStatus.get(`${d}|${dragShift}|${p}`);
+    if (!v) return '';
+    return v.status === 'ok' ? 'tt-cell-drop-ok' : v.status === 'swap' ? 'tt-cell-drop-warn' : 'tt-cell-drop-bad';
+  };
+
+  const endDrag = () => {
+    setDragCardId(null);
+    setHovered(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, d: number, sh: number, p: number, rowId?: string) => {
+    e.preventDefault();
+    const fromDock = e.dataTransfer.getData('text/plain');
+    if (rowId && dragOwnerRow && rowId !== dragOwnerRow) {
+      onNotify?.(
+        isWholeTeachers || viewMode === 'single_teacher'
+          ? 'Хичээлийг өөр багшид шилжүүлэх бол "Хичээлүүд" цонхноос багшийг солино уу'
+          : 'Хичээл өөр анги руу шилжихгүй — зөвхөн өөрийн мөрөнд зөөнө'
+      );
+      endDrag();
+      return;
+    }
+    if (dragCardId) {
+      const card = scheduledCards.find((c) => c.id === dragCardId);
+      if (card && (!sh || sh === card.shift)) onMoveCard(dragCardId, d, p);
+      else if (card) onNotify?.(`Энэ хичээл ${card.shift}-р ээлжийнх тул өөр ээлжийн цагт тавигдахгүй`);
+    } else if (fromDock) {
+      onDropNewCard(fromDock, d, p);
+    }
+    endDrag();
+  };
+
+  // ---------------- Карт ----------------
+  const renderCard = (card: ScheduledCard, compact: boolean, perspective: 'class' | 'teacher' | 'room') => {
+    const sub = subMap.get(card.subjectId);
+    const teacher = teachMap.get(card.teacherId);
+    const cls = clsMap.get(card.classId);
+    const room = card.classroomId ? roomMap.get(card.classroomId) : undefined;
+    const primary =
+      perspective === 'class' ? sub?.shortName || sub?.name?.slice(0, 4) || '–' : cls?.shortName || cls?.name || '–';
+    const sg = card.subgroupName ? card.subgroupName.replace(/-р дэд бүлэг$/, '').slice(0, 3) : '';
+    const isSel = selectedCardId === card.id;
+    const isErr = errorCards.has(card.id);
+    const weekMark = card.weekCycle === 'week_a' ? 'А' : card.weekCycle === 'week_b' ? 'Б' : '';
+    return (
+      <div
+        key={card.id}
+        draggable={!card.isLocked}
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('application/x-card', card.id);
+          setDragCardId(card.id);
+          setSelectedCardId(card.id);
+        }}
+        onDragEnd={endDrag}
+        onClick={(e) => {
+          e.stopPropagation();
+          setSelectedCardId(isSel ? null : card.id);
+        }}
+        className={`tt-card relative w-full flex items-center justify-center text-center leading-tight ${
+          compact ? 'px-0.5 py-[1px] text-[10px]' : 'h-full min-h-[1.9rem] px-1 py-0.5 text-[11px]'
+        } ${card.isLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${isErr ? 'tt-card-conflict' : ''} ${
+          isSel ? 'outline outline-2 outline-[#2f5d52] outline-offset-[-1px]' : ''
+        }`}
+        style={cardStyle(sub?.color)}
+        title={`${sub?.name || ''} · ${cls?.name || ''}${card.subgroupName ? ` [${card.subgroupName}]` : ''}\n${teacher?.name || ''}${
+          room ? ` · ${room.name}` : ''
+        }${weekMark ? `\n${weekMark} 7 хоног` : ''}${card.isLocked ? '\nТүгжээтэй' : ''}`}
+      >
+        <span className="font-semibold text-slate-900 truncate">{primary}</span>
+        {sg && <span className="ml-0.5 text-[8.5px] text-slate-600 shrink-0">{sg}</span>}
+        {weekMark && <span className="ml-0.5 text-[8.5px] font-bold text-amber-700 shrink-0">{weekMark}</span>}
+        {card.isLocked && <Lock className="absolute top-[1px] right-[1px] w-2.5 h-2.5 text-amber-700" />}
+      </div>
+    );
+  };
+
+  const selectedCard = selectedCardId ? scheduledCards.find((c) => c.id === selectedCardId) : undefined;
+
+  // ---------------- Ганц харагдац ----------------
+  const singleRows: Col[] = useMemo(() => {
+    if (viewMode === 'single_class') {
+      const cls = clsMap.get(activeEntityId);
+      const sh = shiftConf(cls?.shift || 1);
+      return Array.from({ length: sh.periodsCount }, (_, p) => ({
+        shift: sh.shiftNumber,
+        period: p,
+        label: `${p + 1}-р цаг`,
+        time: sh.bells[p] ? `${sh.bells[p].startTime}–${sh.bells[p].endTime}` : '',
+      }));
+    }
+    return multiShiftTimeline().map((c) => ({ ...c, label: c.label.includes('·') ? `${c.label.replace('·', '-р ээлж, ')}-р цаг` : `${c.label}-р цаг` }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, activeEntityId, activeShift, settings, clsMap]);
+
+  const singleEntity =
+    viewMode === 'single_class'
+      ? clsMap.get(activeEntityId)
+      : viewMode === 'single_teacher'
+        ? teachMap.get(activeEntityId)
+        : roomMap.get(activeEntityId);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden select-none bg-[#dfe4eb] font-sans">
-      {/* If Single View is Active */}
+    <div className="flex-1 flex flex-col overflow-hidden select-none bg-[#ecebe5] relative" onClick={() => setSelectedCardId(null)}>
       {!isMasterGrid ? (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Top entity status */}
-            <div className="bg-[#e7edf4] border-b border-[#b5c2d1] px-4 py-1.5 flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-800 text-[12px] flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-xs bg-blue-600"></span>
-                {viewMode === 'single_class' && `${clsMap.get(activeEntityId)?.name || 'Анги'} (${clsMap.get(activeEntityId)?.shift || 1}-р ээлж)`}
-                {viewMode === 'single_teacher' && `${teachMap.get(activeEntityId)?.name || 'Багш'} багшийн хуваарь`}
-                {viewMode === 'single_room' && `${roomMap.get(activeEntityId)?.name || 'Танхим'} танхимын хуваарь`}
-              </span>
-              <button
-                onClick={() => onChangeViewMode?.('whole_teachers')}
-                className="px-2 py-0.5 bg-white border border-[#b5c2d1] rounded text-[11px] font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
-              >
-                ← Бүх хуваарь харах
-              </button>
-            </div>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="bg-white border-b border-[#d6d1c6] px-4 py-2 flex items-center justify-between text-xs">
+            <span className="font-semibold text-slate-900 text-[13px]">
+              {viewMode === 'single_class' && `${singleEntity?.name || 'Анги'} · ${(singleEntity as ClassGroup | undefined)?.shift || 1}-р ээлж`}
+              {viewMode === 'single_teacher' && `${singleEntity?.name || 'Багш'}`}
+              {viewMode === 'single_room' && `${singleEntity?.name || 'Танхим'}`}
+            </span>
+            <button
+              onClick={() => onChangeViewMode?.(viewMode === 'single_class' ? 'whole_classes' : 'whole_teachers')}
+              className="px-2.5 py-1 bg-white border border-[#d6d1c6] rounded-md text-[11px] font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+            >
+              Бүх хуваарь руу буцах
+            </button>
+          </div>
 
-            {/* Single Grid Table */}
-            <div className="flex-1 overflow-auto p-2 bg-[#dbe1e9]">
-              <div className="border border-[#9ba9ba] bg-[#dbe1e9] shadow-xs overflow-hidden min-w-[700px]">
-                <table className="w-full text-center border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-[#dce4ed] border-b border-[#a0aec0]">
-                      <th className="p-1.5 border-r border-[#a0aec0] w-28 text-slate-800 font-bold text-left bg-[#d2dce7]">
-                        Цаг / Гараг
-                      </th>
-                      {settings.dayNames.map((dName, d) => (
-                        <th key={d} className="p-1.5 border-r border-[#a0aec0] font-bold text-slate-800">
-                          {dName}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#b8c5d3]">
-                    {Array.from({ length: periodsCount }).map((_, p) => {
-                      const bell = bells[p];
+          <div className="flex-1 overflow-auto p-3">
+            <table className="w-full min-w-[720px] text-center border-separate border-spacing-0 text-xs bg-white rounded-lg overflow-hidden border border-[#d6d1c6]">
+              <thead>
+                <tr>
+                  <th className="p-2 border-b border-r border-[#d6d1c6] w-36 text-left font-semibold text-slate-600 bg-slate-100">Цаг</th>
+                  {settings.dayNames.map((dName, d) => (
+                    <th key={d} className="p-2 border-b border-r border-[#d6d1c6] font-semibold text-slate-800 bg-slate-100">
+                      {dName}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {singleRows.map((col) => (
+                  <tr key={`${col.shift}_${col.period}`}>
+                    <td className="px-2 py-1.5 border-b border-r border-[#d6d1c6] text-left bg-slate-50 align-middle">
+                      <div className="font-semibold text-slate-800">{col.label}</div>
+                      {col.time && <div className="text-[10px] text-slate-500">{col.time}</div>}
+                    </td>
+                    {settings.dayNames.map((_, d) => {
+                      const cards =
+                        viewMode === 'single_class'
+                          ? classCell(activeEntityId, d, col.period)
+                          : viewMode === 'single_teacher'
+                            ? teacherCell(activeEntityId, d, col)
+                            : roomCell(activeEntityId, d, col);
+                      const off =
+                        singleEntity && getTimeOffStatus((singleEntity as any).timeOff, col.shift, d, col.period) === 'forbidden';
+                      const key = `s|${d}|${col.shift}|${col.period}`;
+                      const drop = cellDropClass(activeEntityId, d, col.shift, col.period);
                       return (
-                        <tr key={p} className="h-14">
-                          <td className="p-1 border-r border-[#a0aec0] bg-[#e9eef5] text-left align-middle font-bold text-slate-800">
-                            <div>{p + 1}-р цаг</div>
-                            {bell && (
-                              <div className="font-mono text-[10px] text-slate-500 font-normal">
-                                {bell.startTime} - {bell.endTime}
-                              </div>
-                            )}
-                          </td>
-                          {settings.dayNames.map((_, d) => {
-                            const isHovered = hoveredSlot?.day === d && hoveredSlot?.period === p;
-                            const card = filteredCards.find((c) => {
-                              if (viewMode === 'single_class') return c.classId === activeEntityId && c.dayIndex === d && c.periodIndex === p;
-                              if (viewMode === 'single_teacher') return c.teacherId === activeEntityId && c.dayIndex === d && c.periodIndex === p;
-                              return c.classroomId === activeEntityId && c.dayIndex === d && c.periodIndex === p;
-                            });
-
-                            const sub = card ? subMap.get(card.subjectId) : undefined;
-                            const teacher = card ? teachMap.get(card.teacherId) : undefined;
-                            const cls = card ? clsMap.get(card.classId) : undefined;
-                            const room = card?.classroomId ? roomMap.get(card.classroomId) : undefined;
-
-                            return (
-                              <td
-                                key={d}
-                                onDragOver={(e) => handleDragOver(e, d, p, activeEntityId)}
-                                onDragLeave={handleDragLeave}
-                                onDrop={(e) => handleDrop(e, d, p, activeEntityId)}
-                                className={`p-1 border-r border-[#b8c5d3] relative transition-colors ${
-                                  isHovered ? 'bg-blue-100 ring-2 ring-blue-500 ring-inset' : 'bg-[#dfe4ec]'
-                                }`}
-                              >
-                                {card ? (
-                                  <div
-                                    draggable
-                                    onDragStart={() => setDraggedCardId(card.id)}
-                                    className="h-full min-h-[3rem] bg-white rounded-xs p-1 flex flex-col justify-between text-left cursor-grab active:cursor-grabbing border border-[#9aa6b6] shadow-xs"
-                                  >
-                                    <div className="flex items-center justify-between font-bold text-slate-900 text-[11px] truncate">
-                                      <span>{sub?.shortName || sub?.name || 'Хичээл'}</span>
-                                      <div className="flex items-center gap-1 shrink-0">
-                                        <button onClick={() => onToggleLock(card.id)} className="text-slate-400 hover:text-slate-700">
-                                          {card.isLocked ? <Lock className="w-3 h-3 text-amber-600" /> : <Unlock className="w-3 h-3 opacity-20 hover:opacity-100" />}
-                                        </button>
-                                        <button onClick={() => onRemoveCard(card.id)} className="text-slate-400 hover:text-rose-600 opacity-40 hover:opacity-100">
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                    <div className="text-[10px] text-slate-600 font-semibold truncate">
-                                      {viewMode === 'single_class' ? teacher?.name : cls?.name}
-                                    </div>
-                                    <div className="text-[9px] text-slate-400 truncate">
-                                      {room?.shortName || 'Үндсэн'}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="h-full min-h-[3rem] flex items-center justify-center text-slate-400 text-xs font-mono">
-                                    –
+                        <td
+                          key={d}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            if (hovered !== key) setHovered(key);
+                          }}
+                          onDrop={(e) => handleDrop(e, d, col.shift, col.period, activeEntityId)}
+                          className={`p-1 h-14 border-b border-r border-[#e6e2da] align-middle ${off ? 'tt-cell-forbidden' : ''} ${drop} ${
+                            hovered === key ? 'ring-2 ring-inset ring-[#2f5d52]' : ''
+                          }`}
+                        >
+                          <div className="flex flex-col gap-0.5 h-full justify-center">
+                            {cards.map((c) => (
+                              <div key={c.id} className="flex flex-col">
+                                {renderCard(c, cards.length > 1, viewMode === 'single_class' ? 'class' : 'teacher')}
+                                {cards.length === 1 && (
+                                  <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                                    {viewMode === 'single_class'
+                                      ? teachMap.get(c.teacherId)?.name
+                                      : `${subMap.get(c.subjectId)?.shortName || ''}${c.classroomId ? ` · ${roomMap.get(c.classroomId)?.shortName}` : ''}`}
                                   </div>
                                 )}
-                              </td>
-                            );
-                          })}
-                        </tr>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* Master Whole Grid (Whole Teachers or Whole Classes matching uploaded image) */
-          <div className="flex-1 flex flex-col overflow-hidden bg-[#dfe4eb]">
-            <div className="flex-1 overflow-auto bg-[#dfe4eb]">
-              <table className="w-full text-center border-collapse text-xs min-w-[1280px]">
-                {/* Header 1: Гарагууд (Даваа, Мягмар, Лхагва, Пүрэв, Баасан) */}
-                <thead className="sticky top-0 z-20 shadow-xs">
-                  <tr className="bg-[#dce4ed] border-b border-[#a0aec0]">
-                    {/* Top Left Corner */}
-                    <th className="p-1 border-r-2 border-[#8b9aa9] w-36 bg-[#d2dce7] text-slate-800 font-bold sticky left-0 z-30 text-left pl-2">
-                      {isWholeTeachers ? 'Багш нар' : 'Анги бүлэг'}
-                    </th>
-                    {settings.dayNames.map((dName, d) => (
-                      <th
-                        key={d}
-                        colSpan={periodsCount}
-                        className="py-1 px-2 border-r-2 border-[#8b9aa9] bg-[#dce4ed] font-bold text-slate-800 border-b border-[#a0aec0] text-center tracking-tight text-[11px]"
-                      >
-                        <span className="font-bold">{dName}</span>
-                      </th>
-                    ))}
                   </tr>
-
-                  {/* Header 2: Period Numbers (1, 2, 3, 4, 5, 6, 7 or Shift prefix like 2-1, 2-2, 2-4 in yellow) */}
-                  <tr className="bg-[#ebf0f5] border-b-2 border-[#8b9aa9] text-[10px]">
-                    <th className="p-1 border-r-2 border-[#8b9aa9] bg-[#dce4ed] sticky left-0 z-30 text-slate-500 font-medium text-left pl-2">
-                      {rowEntities.length} {isWholeTeachers ? 'багш' : 'анги'}
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-auto">
+          <table className="text-center border-separate border-spacing-0 text-xs" style={{ minWidth: 160 + settings.daysPerWeek * masterCols.length * 46 }}>
+            <thead className="sticky top-0 z-20">
+              <tr>
+                <th className="sticky left-0 z-30 bg-white border-b border-r-2 border-[#d6d1c6] w-40 px-3 py-1.5 text-left font-semibold text-slate-800">
+                  {isWholeTeachers ? 'Багш' : 'Анги'}
+                </th>
+                {settings.dayNames.map((dName, d) => (
+                  <th
+                    key={d}
+                    colSpan={masterCols.length}
+                    className="bg-white py-1.5 border-b border-r-2 border-[#d6d1c6] font-semibold text-slate-800 text-[12px]"
+                  >
+                    {dName}
+                  </th>
+                ))}
+              </tr>
+              <tr>
+                <th className="sticky left-0 z-30 bg-slate-100 border-b border-r-2 border-[#d6d1c6] px-3 py-1 text-left font-normal text-[10.5px] text-slate-500">
+                  {rowEntities.length} {isWholeTeachers ? 'багш' : 'анги'}
+                </th>
+                {settings.dayNames.flatMap((_, d) =>
+                  masterCols.map((col, ci) => (
+                    <th
+                      key={`${d}_${ci}`}
+                      title={col.time ? `${settings.dayNames[d]}, ${col.label}-р цаг (${col.time})` : undefined}
+                      className={`bg-slate-100 py-1 border-b border-[#d6d1c6] font-medium text-[10.5px] text-slate-600 w-[46px] ${
+                        ci === masterCols.length - 1 ? 'border-r-2' : 'border-r border-r-[#e6e2da]'
+                      }`}
+                    >
+                      {col.label}
                     </th>
+                  ))
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rowEntities.map((entity, ri) => {
+                const isSelRow = selectedRowId === entity.id;
+                const prevShift = ri > 0 && isWholeClasses ? (rowEntities[ri - 1] as ClassGroup).shift : null;
+                const showShiftHeader = isWholeClasses && !activeShift && (ri === 0 || prevShift !== (entity as ClassGroup).shift);
+                const rowShift = isWholeClasses ? (entity as ClassGroup).shift || 1 : 0;
+                const rowPeriods = isWholeClasses ? shiftConf(rowShift).periodsCount : 99;
+                const mgr = isWholeTeachers ? managers?.find((m) => m.id === (entity as Teacher).managerId) : undefined;
+                const sc = isWholeClasses ? shiftConf((entity as ClassGroup).shift || 1) : null;
+                return (
+                  <React.Fragment key={entity.id}>
+                  {showShiftHeader && sc && (
+                    <tr>
+                      <td
+                        colSpan={1 + settings.daysPerWeek * masterCols.length}
+                        className="sticky left-0 bg-[#e2dfd7] px-3 py-1 text-left text-[11px] font-semibold text-slate-700 border-b border-[#d6d1c6]"
+                      >
+                        {sc.name || `${sc.shiftNumber}-р ээлж`} · {sc.bells[0]?.startTime}–{sc.bells[sc.periodsCount - 1]?.endTime}
+                      </td>
+                    </tr>
+                  )}
+                  <tr className="h-9">
+                    <td
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedRowId(isSelRow ? null : entity.id);
+                      }}
+                      className={`sticky left-0 z-10 px-3 py-1 border-b border-r-2 border-[#d6d1c6] text-left cursor-pointer ${
+                        isSelRow ? 'bg-[#f3e4b9]' : 'bg-white hover:bg-slate-50'
+                      }`}
+                      title={entity.name}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        {mgr && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: mgr.color }} title={mgr.title} />}
+                        <span className="truncate text-[11.5px] font-medium text-slate-900">{entity.name}</span>
+                      </div>
+                    </td>
                     {settings.dayNames.flatMap((_, d) =>
-                      Array.from({ length: periodsCount }).map((_, p) => {
-                        const isSelectedCol = selectedPeriodCol?.day === d && selectedPeriodCol?.period === p;
-                        const periodLabel = activeShift === 2 ? `2-${p + 1}` : `${p + 1}`;
-                        const isDayEnd = p === periodsCount - 1;
-
+                      masterCols.map((col, ci) => {
+                        const sh = isWholeClasses ? rowShift : col.shift;
+                        const outside = isWholeClasses && col.period >= rowPeriods;
+                        const key = `${entity.id}|${d}|${ci}`;
+                        const off =
+                          !outside && getTimeOffStatus((entity as any).timeOff, sh, d, col.period) === 'forbidden';
+                        const cards = outside
+                          ? []
+                          : isWholeClasses
+                            ? classCell(entity.id, d, col.period)
+                            : teacherCell(entity.id, d, col);
+                        const drop = outside ? '' : cellDropClass(entity.id, d, sh, col.period);
                         return (
-                          <th
-                            key={`${d}_${p}`}
-                            onClick={() => setSelectedPeriodCol({ day: d, period: p })}
-                            className={`py-0.5 px-1 border-r text-slate-800 font-bold w-12 cursor-pointer transition select-none ${
-                              isDayEnd ? 'border-r-2 border-[#8b9aa9]' : 'border-r-[#b8c4d2]'
-                            } ${
-                              isSelectedCol
-                                ? 'bg-[#ffff00] text-black font-extrabold shadow-inner'
-                                : 'bg-[#edf1f6] hover:bg-slate-200'
+                          <td
+                            key={key}
+                            onDragOver={(e) => {
+                              if (outside) return;
+                              e.preventDefault();
+                              if (hovered !== key) setHovered(key);
+                            }}
+                            onDrop={(e) => !outside && handleDrop(e, d, sh, col.period, entity.id)}
+                            className={`p-[2px] align-middle border-b border-[#e6e2da] ${
+                              ci === masterCols.length - 1 ? 'border-r-2 border-r-[#d6d1c6]' : 'border-r border-r-[#e6e2da]'
+                            } ${outside ? 'bg-[#e2dfd7]' : isSelRow ? 'tt-cell-row-selected' : 'tt-cell'} ${off ? 'tt-cell-forbidden' : ''} ${drop} ${
+                              hovered === key && !drop ? 'ring-2 ring-inset ring-[#2f5d52]' : ''
                             }`}
-                            title={`Гараг: ${settings.dayNames[d] || ''}, Цаг: ${p + 1}`}
                           >
-                            {periodLabel}
-                          </th>
+                            {cards.length > 1 ? (
+                              <div className="flex flex-col gap-[1px]">
+                                {cards.map((c) => renderCard(c, true, isWholeClasses ? 'class' : 'teacher'))}
+                              </div>
+                            ) : cards.length === 1 ? (
+                              renderCard(cards[0], false, isWholeClasses ? 'class' : 'teacher')
+                            ) : null}
+                          </td>
                         );
                       })
                     )}
                   </tr>
-                </thead>
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-                {/* Grid Body */}
-                <tbody className="divide-y divide-[#b8c5d3]">
-                  {rowEntities.map((entity: any) => {
-                    const isSelectedRow = selectedRowEntityId === entity.id;
-
-                    return (
-                      <tr
-                        key={entity.id}
-                        onClick={() => setSelectedRowEntityId(entity.id)}
-                        className={`h-9 transition-colors ${
-                          isSelectedRow ? 'bg-[#fffa94]/40' : 'hover:bg-slate-100/50'
-                        }`}
-                      >
-                        {/* Left Column: Entity Name (Highlighted in Yellow if active like Нямцогт Т) */}
-                        <td
-                          onClick={() => setSelectedRowEntityId(entity.id)}
-                          className={`px-2 py-1 border-r-2 border-[#8b9aa9] sticky left-0 z-10 text-left truncate cursor-pointer transition shadow-xs ${
-                            isSelectedRow
-                              ? 'bg-[#ffff00] text-black font-extrabold border-y border-amber-500'
-                              : 'bg-[#edf1f6] text-slate-900 font-semibold border-b border-[#c8d4e2]'
-                          }`}
-                          title={entity.name}
-                        >
-                          <div className="flex items-center gap-1.5 leading-none">
-                            {isWholeTeachers && entity.managerId && (
-                              <span
-                                className="w-2 h-2 rounded-full shrink-0"
-                                style={{ backgroundColor: managers?.find((m) => m.id === entity.managerId)?.color || '#6366f1' }}
-                                title={managers?.find((m) => m.id === entity.managerId)?.title || 'Менежер'}
-                              />
-                            )}
-                            <span className="truncate text-[11px]">{entity.name}</span>
-                            {isWholeClasses && entity.shift && (
-                              <span className="text-[9px] text-slate-500 font-mono">
-                                ({entity.shift}э)
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Schedule Cells across all days and periods */}
-                        {settings.dayNames.flatMap((_, d) =>
-                          Array.from({ length: periodsCount }).map((_, p) => {
-                            const isHovered =
-                              hoveredSlot?.day === d &&
-                              hoveredSlot?.period === p &&
-                              hoveredSlot?.entityId === entity.id;
-
-                            const isDayEnd = p === periodsCount - 1;
-
-                            // Check time off (forbidden/unavailable slot)
-                            const rowShift = isWholeClasses ? entity.shift || 1 : activeShift || 1;
-                            const isForbidden = getTimeOffStatus(entity.timeOff, rowShift, d, p) === 'forbidden';
-
-                            // Find all cards in this slot (supporting parallel subgroups!)
-                            const cellCards = filteredCards.filter((c) => {
-                              if (isWholeClasses) {
-                                return c.classId === entity.id && c.dayIndex === d && c.periodIndex === p;
-                              } else {
-                                return c.teacherId === entity.id && c.dayIndex === d && c.periodIndex === p;
-                              }
-                            });
-
-                            return (
-                              <td
-                                key={`${d}_${p}`}
-                                onDragOver={(e) => handleDragOver(e, d, p, entity.id)}
-                                onDragLeave={handleDragLeave}
-                                onDrop={(e) =>
-                                  handleDrop(e, d, p, isWholeClasses ? entity.id : undefined)
-                                }
-                                className={`p-0.5 align-middle relative transition-colors ${
-                                  isDayEnd ? 'border-r-2 border-[#8b9aa9]' : 'border-r border-[#b8c5d3]'
-                                } ${
-                                  isForbidden
-                                    ? 'bg-[#d2dbe5]'
-                                    : isSelectedRow
-                                    ? 'bg-[#fffed0]'
-                                    : 'bg-[#dfe4ec]'
-                                } ${
-                                  isHovered ? 'bg-blue-200 ring-2 ring-blue-500 ring-inset' : ''
-                                }`}
-                              >
-                                {cellCards.length > 1 ? (
-                                  /* Split Parallel Cards Cell (Simultaneous Subgroups!) */
-                                  <div className="flex flex-col gap-0.5 h-full w-full justify-center">
-                                    {cellCards.map((cCard) => {
-                                      const cSub = subMap.get(cCard.subjectId);
-                                      const cTeacher = teachMap.get(cCard.teacherId);
-                                      const cCls = clsMap.get(cCard.classId);
-                                      const isCSelected = selectedCardId === cCard.id;
-                                      const cText = isWholeTeachers
-                                        ? `${cCls?.name || ''}${cCard.subgroupName ? ` (${cCard.subgroupName.slice(0, 3)})` : ''}`
-                                        : `${cSub?.shortName || cSub?.name?.slice(0, 3) || ''}${
-                                            cCard.subgroupName ? ` (${cCard.subgroupName.slice(0, 3)})` : ''
-                                          }`;
-
-                                      return (
-                                        <div
-                                          key={cCard.id}
-                                          draggable
-                                          onDragStart={() => setDraggedCardId(cCard.id)}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedCardId(cCard.id);
-                                          }}
-                                          className={`py-0.5 px-1 rounded-xs bg-white text-slate-900 border border-[#9aa6b6] flex items-center justify-between text-[9px] font-bold cursor-grab active:cursor-grabbing shadow-2xs hover:border-blue-600 transition ${
-                                            isCSelected ? 'ring-2 ring-red-600' : ''
-                                          }`}
-                                          style={{
-                                            borderLeftWidth: '3px',
-                                            borderLeftColor: cSub?.color || '#3b82f6',
-                                          }}
-                                          title={`${cCls?.name || ''} - ${cSub?.name || ''} [${cCard.subgroupName || 'Дэд бүлэг'}] (${cTeacher?.name || ''})`}
-                                        >
-                                          <span className="truncate">{cText}</span>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                ) : cellCards.length === 1 ? (
-                                  /* Single Card */
-                                  (() => {
-                                    const card = cellCards[0];
-                                    const isCardSelected = selectedCardId === card.id;
-                                    const sub = subMap.get(card.subjectId);
-                                    const teacher = teachMap.get(card.teacherId);
-                                    const cls = clsMap.get(card.classId);
-                                    const primaryCardText = isWholeTeachers
-                                      ? cls?.name || '–'
-                                      : sub?.shortName || sub?.name?.slice(0, 3) || '–';
-
-                                    return (
-                                      <div
-                                        draggable
-                                        onDragStart={() => setDraggedCardId(card.id)}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setSelectedCardId(card.id);
-                                        }}
-                                        className={`h-full min-h-[1.75rem] w-full rounded-xs px-1 py-0.5 bg-white text-slate-900 border border-[#9aa6b6] flex flex-col items-center justify-center text-center cursor-grab active:cursor-grabbing shadow-[0_1px_1px_rgba(0,0,0,0.06)] hover:border-slate-600 transition ${
-                                          isCardSelected ? 'ring-2 ring-red-600 font-extrabold' : 'font-bold'
-                                        }`}
-                                        title={`${cls?.name || ''} - ${sub?.name || ''} ${
-                                          card.subgroupName ? `[${card.subgroupName}]` : ''
-                                        } (${teacher?.name || ''})`}
-                                      >
-                                        <div className="flex items-center gap-1 leading-tight justify-center max-w-full">
-                                          <span className="text-[11px] leading-tight font-bold text-slate-900 truncate">
-                                            {primaryCardText}
-                                          </span>
-                                          {card.subgroupName && (
-                                            <span className="text-[8px] bg-slate-100 text-slate-600 px-0.5 rounded font-normal shrink-0">
-                                              {card.subgroupName.slice(0, 3)}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  })()
-                                ) : isForbidden ? (
-                                  /* Unavailable Cross Marker matching screenshot */
-                                  <div className="h-full w-full flex items-center justify-center text-slate-500 text-[10px] font-mono leading-none">
-                                    ×
-                                  </div>
-                                ) : (
-                                  /* Empty available cell */
-                                  <div className="h-full w-full hover:bg-white/40 transition rounded-xs" />
-                                )}
-                              </td>
-                            );
-                          })
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+      {/* Сонгосон картын мэдээлэл ба үйлдэл */}
+      {selectedCard && (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-40 bg-white border border-[#d6d1c6] rounded-xl shadow-[0_6px_24px_rgba(46,43,38,0.14)] px-3 py-2 flex items-center gap-3 text-[12px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="w-2.5 h-2.5 rounded-full" style={{ background: subMap.get(selectedCard.subjectId)?.color }} />
+          <span className="font-semibold text-slate-900">{subMap.get(selectedCard.subjectId)?.name}</span>
+          <span className="text-slate-600">
+            {clsMap.get(selectedCard.classId)?.name}
+            {selectedCard.subgroupName ? ` [${selectedCard.subgroupName}]` : ''} · {teachMap.get(selectedCard.teacherId)?.name} ·{' '}
+            {settings.dayNames[selectedCard.dayIndex]}, {selectedCard.shift}-р ээлжийн {selectedCard.periodIndex + 1}-р цаг
+          </span>
+          <button
+            onClick={() => onToggleLock(selectedCard.id)}
+            className="flex items-center gap-1 px-2 py-1 rounded-md border border-[#d6d1c6] hover:bg-slate-100 cursor-pointer"
+          >
+            {selectedCard.isLocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+            {selectedCard.isLocked ? 'Түгжээ авах' : 'Түгжих'}
+          </button>
+          <button
+            onClick={() => {
+              onRemoveCard(selectedCard.id);
+              setSelectedCardId(null);
+            }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md border border-[#ebc0b5] text-[#873a30] hover:bg-[#fbf1ee] cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Хуваариас авах
+          </button>
+          <button onClick={() => setSelectedCardId(null)} className="p-1 rounded-md hover:bg-slate-100 cursor-pointer" aria-label="Хаах">
+            <X className="w-3.5 h-3.5 text-slate-500" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

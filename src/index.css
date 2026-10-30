@@ -1,45 +1,256 @@
 @import "tailwindcss";
+@import "@fontsource/golos-text/400.css";
+@import "@fontsource/golos-text/500.css";
+@import "@fontsource/golos-text/600.css";
+@import "@fontsource/golos-text/700.css";
+
+/*
+ * "Эсгий ба хус" өнгөний систем
+ * Олон цаг харах хуваарийн программд зориулсан дулаан, тайван, байгалийн өнгөнүүд:
+ *   хус (гадаргуу) · эсгий (зураас) · бэх (бичвэр) · нарс (үндсэн өнгө) · зөгийн бал (сонголт)
+ *   тоосго (алдаа) · өвс (амжилт) · нил ягаан (нэмэлт).
+ * Tailwind-ийн өнгөний нэрсийг (slate, blue, red …) энд нэг мөр дахин тодорхойлсноор
+ * бүх цонх нэг дор шинэ өнгөнд шилжинэ.
+ */
+@theme {
+  --font-sans: "Golos Text", "Segoe UI", system-ui, sans-serif;
+
+  --color-white: #fffdf9;
+  --color-black: #1f1d1a;
+
+  /* Хус → бэх (саарал биш, дулаан төвийг сахисан) */
+  --color-slate-50: #faf9f6;
+  --color-slate-100: #f3f1ec;
+  --color-slate-200: #e6e2da;
+  --color-slate-300: #d3cdc1;
+  --color-slate-400: #aca496;
+  --color-slate-500: #857d70;
+  --color-slate-600: #686155;
+  --color-slate-700: #514b42;
+  --color-slate-800: #3b3630;
+  --color-slate-900: #2e2b26;
+  --color-slate-950: #1f1d1a;
+  --color-gray-50: #faf9f6;
+  --color-gray-100: #f3f1ec;
+  --color-gray-200: #e6e2da;
+  --color-gray-300: #d3cdc1;
+  --color-gray-400: #aca496;
+  --color-gray-500: #857d70;
+  --color-gray-600: #686155;
+  --color-gray-700: #514b42;
+  --color-gray-800: #3b3630;
+  --color-gray-900: #2e2b26;
+
+  /* Нарс — үндсэн үйлдлийн өнгө (blue, indigo, sky, cyan бүгд үүнд) */
+  --color-blue-50: #eef4f1;
+  --color-blue-100: #dce8e2;
+  --color-blue-200: #bbd3c8;
+  --color-blue-300: #93b8a8;
+  --color-blue-400: #6a9886;
+  --color-blue-500: #4c7e6c;
+  --color-blue-600: #3a6a5b;
+  --color-blue-700: #2f5d52;
+  --color-blue-800: #264b42;
+  --color-blue-900: #1e3b34;
+  --color-blue-950: #13261f;
+  --color-indigo-50: #eef4f1;
+  --color-indigo-100: #dce8e2;
+  --color-indigo-200: #bbd3c8;
+  --color-indigo-300: #93b8a8;
+  --color-indigo-400: #6a9886;
+  --color-indigo-500: #4c7e6c;
+  --color-indigo-600: #3a6a5b;
+  --color-indigo-700: #2f5d52;
+  --color-indigo-800: #264b42;
+  --color-indigo-900: #1e3b34;
+  --color-sky-50: #eef4f1;
+  --color-sky-100: #dce8e2;
+  --color-sky-200: #bbd3c8;
+  --color-sky-300: #93b8a8;
+  --color-sky-400: #6a9886;
+  --color-sky-500: #4c7e6c;
+  --color-sky-600: #3a6a5b;
+  --color-sky-700: #2f5d52;
+  --color-sky-800: #264b42;
+  --color-cyan-50: #eef4f1;
+  --color-cyan-100: #dce8e2;
+  --color-cyan-500: #4c7e6c;
+  --color-cyan-600: #3a6a5b;
+  --color-cyan-700: #2f5d52;
+
+  /* Тоосго — алдаа, устгах */
+  --color-red-50: #fbf1ee;
+  --color-red-100: #f5dfd9;
+  --color-red-200: #ebc0b5;
+  --color-red-300: #dd9a89;
+  --color-red-400: #cb7563;
+  --color-red-500: #b85a47;
+  --color-red-600: #a3483a;
+  --color-red-700: #873a30;
+  --color-red-800: #6c3029;
+  --color-red-900: #572822;
+  --color-rose-50: #fbf1ee;
+  --color-rose-100: #f5dfd9;
+  --color-rose-200: #ebc0b5;
+  --color-rose-300: #dd9a89;
+  --color-rose-400: #cb7563;
+  --color-rose-500: #b85a47;
+  --color-rose-600: #a3483a;
+  --color-rose-700: #873a30;
+  --color-rose-800: #6c3029;
+  --color-rose-900: #572822;
+
+  /* Өвс — амжилт, зөвшөөрөгдсөн */
+  --color-emerald-50: #f2f6ef;
+  --color-emerald-100: #e2ebdc;
+  --color-emerald-200: #c7d8bc;
+  --color-emerald-300: #a6c096;
+  --color-emerald-400: #85a574;
+  --color-emerald-500: #6b8c5a;
+  --color-emerald-600: #567348;
+  --color-emerald-700: #455c3b;
+  --color-emerald-800: #384a31;
+  --color-emerald-900: #2e3d29;
+  --color-green-50: #f2f6ef;
+  --color-green-100: #e2ebdc;
+  --color-green-200: #c7d8bc;
+  --color-green-500: #6b8c5a;
+  --color-green-600: #567348;
+  --color-green-700: #455c3b;
+  --color-green-800: #384a31;
+  --color-teal-50: #f2f6ef;
+  --color-teal-100: #e2ebdc;
+  --color-teal-500: #6b8c5a;
+  --color-teal-600: #567348;
+  --color-teal-700: #455c3b;
+
+  /* Зөгийн бал — сонголт, сануулга */
+  --color-amber-50: #fbf6ea;
+  --color-amber-100: #f5eac9;
+  --color-amber-200: #ecd596;
+  --color-amber-300: #e0bc63;
+  --color-amber-400: #d2a444;
+  --color-amber-500: #bc8a2f;
+  --color-amber-600: #9e6f25;
+  --color-amber-700: #7e5720;
+  --color-amber-800: #66461e;
+  --color-amber-900: #543a1c;
+  --color-yellow-50: #fbf6ea;
+  --color-yellow-100: #f5eac9;
+  --color-yellow-200: #ecd596;
+  --color-yellow-300: #e0bc63;
+  --color-yellow-400: #d2a444;
+  --color-yellow-500: #bc8a2f;
+  --color-yellow-600: #9e6f25;
+  --color-yellow-700: #7e5720;
+  --color-orange-50: #fbf6ea;
+  --color-orange-100: #f5eac9;
+  --color-orange-200: #ecd596;
+  --color-orange-500: #bc8a2f;
+  --color-orange-600: #9e6f25;
+  --color-orange-700: #7e5720;
+
+  /* Нил ягаан — менежер, дэд бүлэг зэрэг нэмэлт ялгаа */
+  --color-purple-50: #f7f2f6;
+  --color-purple-100: #ede2eb;
+  --color-purple-200: #dcc6d8;
+  --color-purple-300: #c4a2be;
+  --color-purple-500: #8e6584;
+  --color-purple-600: #76526d;
+  --color-purple-700: #614459;
+  --color-purple-800: #4f3949;
+  --color-violet-50: #f7f2f6;
+  --color-violet-100: #ede2eb;
+  --color-violet-500: #8e6584;
+  --color-violet-600: #76526d;
+  --color-violet-700: #614459;
+  --color-pink-50: #f7f2f6;
+  --color-pink-100: #ede2eb;
+  --color-pink-200: #dcc6d8;
+  --color-pink-500: #8e6584;
+  --color-pink-600: #76526d;
+  --color-pink-700: #614459;
+  --color-fuchsia-100: #ede2eb;
+  --color-fuchsia-600: #76526d;
+  --color-fuchsia-700: #614459;
+}
+
+:root {
+  --birch: #ecebe5;
+  --birch-deep: #e2dfd7;
+  --paper: #fffdf9;
+  --felt: #d6d1c6;
+  --felt-deep: #b9b2a4;
+  --ink: #2e2b26;
+  --ink-soft: #686155;
+  --pine: #2f5d52;
+  --pine-soft: #dce8e2;
+  --honey: #f3e4b9;
+  --honey-deep: #b7862c;
+}
 
 @layer base {
-  html, body, #root {
+  html,
+  body,
+  #root {
     height: 100%;
     margin: 0;
     padding: 0;
-    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Tahoma, Arial, "Noto Sans", sans-serif;
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
-    color: #1e293b;
-    background-color: #dbe2ec;
+    color: var(--ink);
+    background-color: var(--birch);
     user-select: none;
   }
 
-  /* Thin classic scrollbars */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
   }
   ::-webkit-scrollbar-track {
-    background: #e2e8f0;
+    background: var(--birch);
   }
   ::-webkit-scrollbar-thumb {
-    background: #94a3b8;
-    border-radius: 2px;
+    background: var(--felt);
+    border-radius: 6px;
+    border: 2px solid var(--birch);
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #64748b;
+    background: var(--felt-deep);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--pine);
+    outline-offset: 1px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
-/* Authentic Desktop Grid & Ribbon custom styling matching aSc Timetables 2027 */
+/* Цонхны гарчиг: градиент биш, нарсан ногоон нэг өнгө */
+.dialog-titlebar {
+  background: var(--pine);
+  color: #fdfbf6;
+}
+
 .asc-window-titlebar {
-  background: linear-gradient(to bottom, #f2f6fa 0%, #e6eef6 50%, #d8e3ed 100%);
-  border-bottom: 1px solid #b2c1d3;
+  background: var(--paper);
+  border-bottom: 1px solid var(--felt);
 }
 
 .asc-ribbon {
-  background: linear-gradient(to bottom, #f5f8fc 0%, #e9eff6 45%, #dde6f1 100%);
-  border-bottom: 1px solid #b0c0d2;
+  background: var(--paper);
+  border-bottom: 1px solid var(--felt);
 }
 
 .asc-ribbon-btn {
@@ -47,28 +258,32 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 3px 6px;
-  border-radius: 3px;
+  padding: 4px 7px;
+  border-radius: 6px;
   border: 1px solid transparent;
-  color: #1e293b;
+  color: var(--ink);
   font-size: 11px;
   line-height: 1.2;
-  transition: all 0.1s ease;
+  transition: background-color 0.12s ease;
   cursor: pointer;
 }
 
 .asc-ribbon-btn:hover {
-  background: #ffffff;
-  border-color: #8bb0dc;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  background: var(--birch);
 }
 
 .asc-ribbon-btn:active {
-  background: #cde0f5;
-  border-color: #6b9ad4;
+  background: var(--pine-soft);
 }
 
-/* Vertical tab text rotated 90 degrees */
+/* Хэрэгслийн самбарын дүрс тэмдэг нэг өнгөтэй — солонгорсон дүрс нүд ядраана */
+.ribbon-icon {
+  color: var(--ink-soft);
+}
+.ribbon-icon-primary {
+  color: var(--pine);
+}
+
 .vertical-tab-text {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
@@ -76,11 +291,45 @@
   letter-spacing: 0.5px;
 }
 
-/* Status bar inset panels */
 .asc-status-panel {
-  background-color: #e5edf6;
-  border: 1px solid #b8c7d8;
-  border-radius: 2px;
+  background-color: transparent;
+  border: none;
+  border-radius: 4px;
   padding: 1px 6px;
-  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.04);
+  color: var(--ink-soft);
+}
+
+/* Хуваарийн хүснэгт */
+.tt-cell {
+  background: var(--birch);
+}
+.tt-cell-row-selected {
+  background: #f6efd9;
+}
+.tt-cell-forbidden {
+  background-image: repeating-linear-gradient(135deg, transparent 0 5px, rgba(104, 97, 85, 0.13) 5px 6px);
+}
+.tt-cell-drop-ok {
+  background: #e2ebdc !important;
+  box-shadow: inset 0 0 0 2px #85a574;
+}
+.tt-cell-drop-warn {
+  background: #f5eac9 !important;
+  box-shadow: inset 0 0 0 2px #d2a444;
+}
+.tt-cell-drop-bad {
+  background: #f5dfd9 !important;
+  box-shadow: inset 0 0 0 2px #cb7563;
+}
+.tt-col-selected {
+  background: var(--honey) !important;
+  color: var(--ink) !important;
+}
+.tt-card {
+  background: var(--paper);
+  border: 1px solid var(--felt);
+  border-radius: 5px;
+}
+.tt-card-conflict {
+  box-shadow: inset 0 0 0 1.5px #b85a47;
 }

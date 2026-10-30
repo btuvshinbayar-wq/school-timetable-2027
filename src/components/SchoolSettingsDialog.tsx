@@ -1,3 +1,4 @@
+import { isDesktop } from '../desktop';
 import React, { useState } from 'react';
 import { SchoolSettings, ShiftConfig, BellPeriod, Building } from '../types/timetable';
 import { calculateShiftBells } from '../utils/defaultData';
@@ -171,7 +172,7 @@ export const SchoolSettingsDialog: React.FC<SchoolSettingsDialogProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-slate-50 rounded-lg shadow-2xl border border-slate-300 w-full max-w-3xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Title bar */}
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white px-4 py-2.5 flex items-center justify-between select-none">
+        <div className="dialog-titlebar text-white px-4 py-2.5 flex items-center justify-between select-none">
           <div className="flex items-center gap-2">
             <School className="w-4 h-4 text-sky-200" />
             <span className="font-semibold text-sm">
@@ -637,7 +638,7 @@ export const SchoolSettingsDialog: React.FC<SchoolSettingsDialogProps> = ({
       {showNamingModal && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/65 backdrop-blur-xs p-4">
           <div className="bg-white rounded-lg shadow-2xl border border-slate-300 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white px-4 py-3 flex items-center justify-between">
+            <div className="dialog-titlebar text-white px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Save className="w-4 h-4 text-sky-200" />
                 <span className="font-bold text-sm">Хуваарийн төсөлд нэр өгч хадгалах</span>
@@ -697,7 +698,7 @@ export const SchoolSettingsDialog: React.FC<SchoolSettingsDialogProps> = ({
                   className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold shadow-md flex items-center gap-2 cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>Баталгаажуулж JSON-р хадгалах</span>
+                  <span>{isDesktop ? 'Баталгаажуулж хадгалах' : 'Баталгаажуулж JSON-р хадгалах'}</span>
                 </button>
               </div>
             </form>

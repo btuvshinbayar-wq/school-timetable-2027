@@ -31,7 +31,11 @@ import {
   timesOverlap,
   weeksOverlap,
   TimeModel,
+  DayItem,
+  dayProfile,
+  cardBuilding,
 } from './constraints';
+import { SolveOptions, TimetableSolver } from './solver';
 
 export interface CardToPlace {
   id: string;
@@ -102,7 +106,8 @@ export function testTimetableFeasibility(
   classes: ClassGroup[],
   classrooms: Classroom[],
   contracts: LessonContract[],
-  settings: SchoolSettings
+  settings: SchoolSettings,
+  relationships: CardRelationship[] = []
 ): { passed: boolean; messages: string[] } {
   const messages: string[] = [];
   const tm = buildTimeModel(settings);
@@ -147,6 +152,82 @@ export function testTimetableFeasibility(
     }
   }
 
+  // Танхим бүр, ээлж бүрээр (хуваалцах танхимын багтаамжийг тооцно)
+  const classById = new Map(classes.map((c) => [c.id, c]));
+  for (const room of classrooms) {
+    const mine = contracts.filter((ct) => ct.classroomId === room.id);
+    if (mine.length === 0) continue;
+    const cap = roomCapacity(room);
+    const byShift = new Map<number, LessonContract[]>();
+    for (const ct of mine) {
+      const sh = classById.get(ct.classId)?.shift || 1;
+      if (!byShift.has(sh)) byShift.set(sh, []);
+      byShift.get(sh)!.push(ct);
+    }
+    for (const [sh, list] of byShift) {
+      const demand = weeklyLoad(list);
+      let slots = 0;
+      for (let d = 0; d < days; d++)
+        for (let p = 0; p < tm.periodsCount(sh); p++)
+          if (getTimeOffStatus(room.timeOff, sh, d, p) !== 'forbidden') slots++;
+      if (demand > slots * cap) {
+        messages.push(
+          `❌ [Танхим: ${room.name}] ${sh}-р ээлжид 7 хоногт ${demand} цаг оноогдсон боловч ${slots} нүд × ${cap} зэрэг = ${slots * cap} л багтана.`
+        );
+      }
+    }
+  }
+
+  // 'Хатуу' "өдөрт 1-ээс илүүгүй удаа" дүрэм: хичээлийн оролт (хос цаг = 1) ≤ багш, анги хоёулаа боломжтой өдөр
+  messages.push(...checkOncePerDayFeasibility(teachers, classes, contracts, relationships, settings));
+  return finishFeasibility(messages);
+}
+
+/** Хатуу "өдөрт 1 удаа" дүрмийн өдрийн шалгалт (relationships өгсөн үед) */
+export function checkOncePerDayFeasibility(
+  teachers: Teacher[],
+  classes: ClassGroup[],
+  contracts: LessonContract[],
+  relationships: CardRelationship[],
+  settings: SchoolSettings
+): string[] {
+  const messages: string[] = [];
+  const tm = buildTimeModel(settings);
+  const rules = relationships.filter((r) => r.isActive && r.importance === 'strict' && r.condition === 'teacher_max_once_per_day');
+  if (rules.length === 0) return messages;
+  const tMap = new Map(teachers.map((t) => [t.id, t]));
+  const cMap = new Map(classes.map((c) => [c.id, c]));
+  for (const ct of contracts) {
+    const rule = rules.find(
+      (r) => (!r.teacherIds?.length || r.teacherIds.includes(ct.teacherId)) && (!r.classIds?.length || r.classIds.includes(ct.classId))
+    );
+    if (!rule) continue;
+    const cls = cMap.get(ct.classId);
+    const t = tMap.get(ct.teacherId);
+    if (!cls) continue;
+    const visits = (ct.singleLessons || 0) + (ct.doubleLessons || 0);
+    let okDays = 0;
+    for (let d = 0; d < settings.daysPerWeek; d++) {
+      let any = false;
+      for (let p = 0; p < tm.periodsCount(cls.shift); p++) {
+        if (
+          getTimeOffStatus(t?.timeOff, cls.shift, d, p) !== 'forbidden' &&
+          getTimeOffStatus(cls.timeOff, cls.shift, d, p) !== 'forbidden'
+        )
+          any = true;
+      }
+      if (any) okDays++;
+    }
+    if (visits > okDays * (rule.value || 1)) {
+      messages.push(
+        `❌ [${cls.name} — ${t?.name || 'Багш'}] 7 хоногт ${visits} удаа орох ёстой боловч "өдөрт 1 удаа" (Хатуу) дүрмээр боломжтой өдөр ${okDays} л байна. Хос цаг нэмэх эсвэл дүрмийг 'Өндөр' болгоно уу.`
+      );
+    }
+  }
+  return messages;
+}
+
+function finishFeasibility(messages: string[]): { passed: boolean; messages: string[] } {
   const passed = messages.filter((m) => m.startsWith('❌')).length === 0;
   if (passed && messages.length === 0) {
     messages.push('✅ Хүчин чадлын шалгалт амжилттай! Бүх анги, багш нарын цаг багтаж байна.');
@@ -215,215 +296,11 @@ export function expandContractsToCards(
   return { cardsToPlace, lockedCards };
 }
 
-/** Байрлуулах гэж буй картыг ScheduledCard болгоно */
-function toScheduled(card: CardToPlace, day: number, period: number): ScheduledCard {
-  const sc: ScheduledCard = {
-    id: card.id,
-    contractId: card.contractId,
-    subjectId: card.subjectId,
-    teacherId: card.teacherId,
-    classId: card.classId,
-    subgroupName: card.subgroupName,
-    classroomId: card.classroomId,
-    shift: card.shift,
-    weekCycle: card.weekCycle,
-    dayIndex: day,
-    periodIndex: period,
-  };
-  if (card.coTeacherIds) sc.coTeacherIds = card.coTeacherIds;
-  if (card.jointClassIds) sc.jointClassIds = card.jointClassIds;
-  if (card.doubleHalf && card.partnerCardId) {
-    sc.isDoublePart = card.doubleHalf;
-    sc.linkedCardId = card.partnerCardId;
-  }
-  return sc;
-}
-
-// ---------------------------------------------------------------------------
-// Хамаарлын (relationship) хатуу дүрмүүд — зөвхөн 'strict' ач холбогдолтойг энд шүүнэ.
-// 'high' / 'normal' дүрмүүд verify-д анхааруулга болно (жинтэй тооцоо 2-р шатанд).
-// ---------------------------------------------------------------------------
-
-function rulesAllow(
-  card: CardToPlace,
-  day: number,
-  period: number,
-  tm: TimeModel,
-  relationships: CardRelationship[],
-  placed: ScheduledCard[]
-): boolean {
-  const periodsCount = tm.periodsCount(card.shift);
-  const strict = relationships.filter((r) => r.isActive && r.importance === 'strict');
-  if (strict.length === 0) return true;
-
-  // Хос цагийн 1-р хагасыг шалгахдаа 2-р хагасын цагийг урьдчилан тооцно
-  const extendsNext = card.doubleHalf === 'first';
-  const inClassScope = (r: CardRelationship) =>
-    !r.classIds || r.classIds.length === 0 || classesOf(card).some((c) => r.classIds.includes(c));
-  const inTeacherScope = (r: CardRelationship, tId: string) =>
-    !r.teacherIds || r.teacherIds.length === 0 || r.teacherIds.includes(tId);
-
-  for (const r of strict) {
-    switch (r.condition) {
-      case 'cannot_same_day': {
-        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
-        const others = r.subjectIds.filter((s) => s !== card.subjectId);
-        if (placed.some((c) => c.classId === card.classId && c.dayIndex === day && others.includes(c.subjectId)))
-          return false;
-        break;
-      }
-      case 'cannot_consecutive': {
-        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
-        const others = r.subjectIds.filter((s) => s !== card.subjectId);
-        const lo = period - 1;
-        const hi = extendsNext ? period + 2 : period + 1;
-        if (
-          placed.some(
-            (c) =>
-              c.classId === card.classId &&
-              c.dayIndex === day &&
-              (c.periodIndex === lo || c.periodIndex === hi) &&
-              others.includes(c.subjectId)
-          )
-        )
-          return false;
-        break;
-      }
-      case 'first_or_last': {
-        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
-        if (card.doubleHalf === 'second') break; // 1-р хагасаар шийдэгдэнэ
-        const mode = r.firstOrLastMode || 'first_or_last';
-        const isFirst = period === 0;
-        const isLast = period === periodsCount - 1 || (extendsNext && period === periodsCount - 2);
-        const ok = mode === 'first_only' ? isFirst : mode === 'last_only' ? isLast : isFirst || isLast;
-        if (!ok) return false;
-        break;
-      }
-      case 'allowed_periods_only': {
-        if (!inClassScope(r) || !r.subjectIds.includes(card.subjectId)) break;
-        if (r.allowedPeriods && r.allowedPeriods.length > 0 && !r.allowedPeriods.includes(period)) return false;
-        break;
-      }
-      case 'daily_hours_limit': {
-        const maxPerDay = r.maxPeriodsPerDay || 6;
-        if (r.targetEntity === 'classes') {
-          if (!inClassScope(r)) break;
-          for (const cId of classesOf(card)) {
-            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
-            if (classDaySlots(placed, cId, day, [period]).length > maxPerDay) return false;
-          }
-        } else {
-          for (const tId of teachersOf(card)) {
-            if (!inTeacherScope(r, tId)) continue;
-            const slots = teacherDaySlots(tm, placed, tId, day, [{ shift: card.shift, periodIndex: period }]);
-            if (slots.length > maxPerDay) return false;
-          }
-        }
-        break;
-      }
-      case 'max_consecutive_periods': {
-        const maxConsec = r.maxConsecutive || 3;
-        if (r.targetEntity === 'classes') {
-          for (const cId of classesOf(card)) {
-            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
-            const extra = extendsNext ? [period, period + 1] : [period];
-            if (maxRun(classDaySlots(placed, cId, day, extra)) > maxConsec) return false;
-          }
-        } else {
-          for (const tId of teachersOf(card)) {
-            if (!inTeacherScope(r, tId)) continue;
-            const extra = [{ shift: card.shift, periodIndex: period }];
-            if (extendsNext) extra.push({ shift: card.shift, periodIndex: period + 1 });
-            if (maxRun(teacherDaySlots(tm, placed, tId, day, extra)) > maxConsec) return false;
-          }
-        }
-        break;
-      }
-      case 'teacher_max_once_per_day': {
-        if (!inTeacherScope(r, card.teacherId) || !inClassScope(r)) break;
-        const sameDay = placed.filter(
-          (c) =>
-            c.teacherId === card.teacherId &&
-            c.classId === card.classId &&
-            c.dayIndex === day &&
-            weeksOverlap(c.weekCycle, card.weekCycle)
-        );
-        if (sameDay.length === 0) break;
-        // Зөвхөн өөрийн хос цагийн хамтрагчтайгаа залгаа байх нь зөвшөөрөгдөнө
-        const onlyPartner =
-          r.allowDoubleConsecutive !== false &&
-          !!card.partnerCardId &&
-          sameDay.every((c) => c.id === card.partnerCardId && Math.abs(c.periodIndex - period) === 1);
-        if (!onlyPartner) return false;
-        break;
-      }
-      case 'max_gaps_daily_weekly': {
-        const maxDayGaps = r.maxGapsPerDay ?? 1;
-        if (r.targetEntity === 'classes') {
-          for (const cId of classesOf(card)) {
-            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
-            const extra = extendsNext ? [period, period + 1] : [period];
-            if (countGaps(classDaySlots(placed, cId, day, extra)) > maxDayGaps) return false;
-          }
-        } else {
-          for (const tId of teachersOf(card)) {
-            if (!inTeacherScope(r, tId)) continue;
-            const extra = [{ shift: card.shift, periodIndex: period }];
-            if (extendsNext) extra.push({ shift: card.shift, periodIndex: period + 1 });
-            if (countGaps(teacherDaySlots(tm, placed, tId, day, extra)) > maxDayGaps) return false;
-          }
-        }
-        break;
-      }
-      case 'teaching_days_limit': {
-        const maxDays = r.maxDaysPerWeek ?? 5;
-        if (r.targetEntity === 'classes') {
-          for (const cId of classesOf(card)) {
-            if (r.classIds?.length && !r.classIds.includes(cId)) continue;
-            const days = new Set(placed.filter((c) => cardUsesClass(c, cId)).map((c) => c.dayIndex));
-            if (!days.has(day) && days.size >= maxDays) return false;
-          }
-        } else {
-          for (const tId of teachersOf(card)) {
-            if (!inTeacherScope(r, tId)) continue;
-            const days = new Set(placed.filter((c) => cardUsesTeacher(c, tId)).map((c) => c.dayIndex));
-            if (!days.has(day) && days.size >= maxDays) return false;
-          }
-        }
-        break;
-      }
-      case 'minimize_shift_crossing_gap': {
-        const maxCrossGap = r.maxCrossShiftGap ?? 1;
-        for (const tId of teachersOf(card)) {
-          if (!inTeacherScope(r, tId)) continue;
-          const dayCards = placed.filter((c) => cardUsesTeacher(c, tId) && c.dayIndex === day);
-          const prevShift = dayCards.filter((c) => c.shift === card.shift - 1);
-          const nextShift = dayCards.filter((c) => c.shift === card.shift + 1);
-          if (prevShift.length > 0) {
-            const prevPeriods = tm.periodsCount(card.shift - 1);
-            const maxP = Math.max(...prevShift.map((c) => c.periodIndex));
-            if (prevPeriods - 1 - maxP + period > maxCrossGap) return false;
-          }
-          if (nextShift.length > 0) {
-            const myP = extendsNext ? period + 1 : period;
-            const minP = Math.min(...nextShift.map((c) => c.periodIndex));
-            if (periodsCount - 1 - myP + minP > maxCrossGap) return false;
-          }
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  return true;
-}
-
 /**
  * Main Timetable Generator
  *
- * 1-р шат: бүх хатуу хязгаарлалт нэгдсэн цөмөөр (constraints.ts) шалгагдана.
- * Байршуулах арга (greedy) нь 2-р шатанд буцаалттай хайлтаар солигдоно.
+ * 2-р шат: TimetableSolver (solver.ts) — хүндийг нь эхэлж байршуулж, гацвал саад болж буй
+ * нэгжийг гаргаж засаад (ejection), дараа нь зөөх/солих замаар зөөлөн торгуулийг бууруулна.
  */
 export async function generateTimetable(
   subjects: Subject[],
@@ -434,7 +311,8 @@ export async function generateTimetable(
   relationships: CardRelationship[],
   settings: SchoolSettings,
   existingCards: ScheduledCard[] = [],
-  onProgress?: (progress: number, message: string) => void
+  onProgress?: (progress: number, message: string) => void,
+  options: SolveOptions = {}
 ): Promise<{
   scheduledCards: ScheduledCard[];
   stats: GenerationStats;
@@ -443,259 +321,26 @@ export async function generateTimetable(
   const startTime = Date.now();
   const { cardsToPlace, lockedCards } = expandContractsToCards(contracts, classes, existingCards);
 
-  const ctx: ConstraintContext = { settings, teachers, classes, classrooms, subjects };
-  const occ = new Occupancy(ctx);
-  const tm = occ.tm;
-
-  const resultCards: ScheduledCard[] = [];
-  for (const c of lockedCards) {
-    const enriched = enrichFromContract(c, contracts);
-    resultCards.push(enriched);
-    occ.add(enriched);
-  }
-
-  /** Бүлэг картыг (багц, хос) тухайн өдөр түр байрлуулж үзнэ. Амжилттай бол байрлуулсан картуудыг буцаана. */
-  const tryPlaceGroup = (items: { card: CardToPlace; period: number }[], day: number): ScheduledCard[] | null => {
-    const added: ScheduledCard[] = [];
-    let ok = true;
-    for (const { card, period } of items) {
-      if (period < 0 || period >= tm.periodsCount(card.shift)) {
-        ok = false;
-        break;
-      }
-      const sc = toScheduled(card, day, period);
-      if (!occ.canPlace(sc) || !rulesAllow(card, day, period, tm, relationships, resultCards)) {
-        ok = false;
-        break;
-      }
-      occ.add(sc);
-      resultCards.push(sc);
-      added.push(sc);
-    }
-    if (!ok) {
-      for (const sc of added) {
-        occ.remove(sc);
-        resultCards.splice(resultCards.indexOf(sc), 1);
-      }
-      return null;
-    }
-    return added;
-  };
-
-  const rollback = (added: ScheduledCard[]) => {
-    for (const sc of added) {
-      occ.remove(sc);
-      resultCards.splice(resultCards.indexOf(sc), 1);
-    }
-  };
-
-  /** Боломжит бүх нүдийг туршаад хамгийн бага торгуультайд байрлуулна */
-  const placeBest = (
-    shift: number,
-    lastStartOffset: number,
-    build: (period: number) => { card: CardToPlace; period: number }[],
-    penaltyOf: (day: number, period: number) => number
-  ): boolean => {
-    let best: { day: number; period: number; penalty: number } | null = null;
-    const periods = tm.periodsCount(shift);
-    for (let day = 0; day < settings.daysPerWeek; day++) {
-      for (let period = 0; period < periods - lastStartOffset; period++) {
-        const added = tryPlaceGroup(build(period), day);
-        if (!added) continue;
-        rollback(added);
-        const penalty = penaltyOf(day, period);
-        if (!best || penalty < best.penalty) best = { day, period, penalty };
-      }
-    }
-    if (!best) return false;
-    return tryPlaceGroup(build(best.period), best.day) !== null;
-  };
-
-  // А/Б: эсрэг 7 хоногийн карттай нүдийг хуваалцахыг илүүд үзнэ
-  const abBonus = (card: CardToPlace, day: number, period: number) => {
-    if (card.weekCycle === 'all') return 0;
-    const opposite = card.weekCycle === 'week_a' ? 'week_b' : 'week_a';
-    return resultCards.some(
-      (rc) =>
-        rc.weekCycle === opposite &&
-        rc.dayIndex === day &&
-        rc.periodIndex === period &&
-        classesOf(rc).some((c) => classesOf(card).includes(c))
-    )
-      ? -60
-      : 0;
-  };
-
-  // --- Дэд бүлгийн зэрэгцээ багцууд ---
-  const crossSubgroupRules = relationships.filter(
-    (r) =>
-      r.isActive &&
-      r.condition === 'different_subjects_subgroups_simultaneous' &&
-      r.parallelPairs &&
-      r.parallelPairs.length >= 2
-  );
-  const sameSubgroupRules = relationships.filter(
-    (r) => r.isActive && r.condition === 'same_subject_subgroups_simultaneous'
-  );
-
-  const parallelBundles: CardToPlace[][] = [];
-  const processedCardIds = new Set<string>();
-  // Хос цагийн хагасууд багцад орохгүй (хос шинжээ алдахгүйн тулд)
-  const bundleable = (c: CardToPlace) => !processedCardIds.has(c.id) && !c.isDouble;
-
-  for (const rule of crossSubgroupRules) {
-    const targetClasses =
-      rule.classIds && rule.classIds.length > 0 ? classes.filter((c) => rule.classIds.includes(c.id)) : classes;
-    for (const cls of targetClasses) {
-      const pair1 = rule.parallelPairs![0];
-      const pair2 = rule.parallelPairs![1];
-      const cards1 = cardsToPlace.filter(
-        (c) =>
-          bundleable(c) &&
-          c.classId === cls.id &&
-          c.subjectId === pair1.subjectId &&
-          (!pair1.subgroupName || c.subgroupName === pair1.subgroupName)
-      );
-      const cards2 = cardsToPlace.filter(
-        (c) =>
-          bundleable(c) &&
-          c.classId === cls.id &&
-          c.subjectId === pair2.subjectId &&
-          (!pair2.subgroupName || c.subgroupName === pair2.subgroupName)
-      );
-      const minLen = Math.min(cards1.length, cards2.length);
-      for (let i = 0; i < minLen; i++) {
-        parallelBundles.push([cards1[i], cards2[i]]);
-        processedCardIds.add(cards1[i].id);
-        processedCardIds.add(cards2[i].id);
-      }
-    }
-  }
-
-  for (const cls of classes) {
-    for (const sub of subjects) {
-      const isRuleActive =
-        sameSubgroupRules.length === 0 ||
-        sameSubgroupRules.some(
-          (r) =>
-            (!r.classIds || r.classIds.length === 0 || r.classIds.includes(cls.id)) &&
-            (!r.subjectIds || r.subjectIds.length === 0 || r.subjectIds.includes(sub.id))
-        );
-      if (!isRuleActive) continue;
-
-      const subCards = cardsToPlace.filter(
-        (c) => bundleable(c) && c.classId === cls.id && c.subjectId === sub.id && Boolean(c.subgroupName)
-      );
-      if (subCards.length < 2) continue;
-
-      // Зөвхөн нэг хуваалтын бүлгүүдийг багцална
-      const byCategory = new Map<string, Map<string, CardToPlace[]>>();
-      for (const c of subCards) {
-        const cat = subgroupCategory(classes, cls.id, c.subgroupName!);
-        if (!byCategory.has(cat)) byCategory.set(cat, new Map());
-        const m = byCategory.get(cat)!;
-        if (!m.has(c.subgroupName!)) m.set(c.subgroupName!, []);
-        m.get(c.subgroupName!)!.push(c);
-      }
-      for (const groupMap of byCategory.values()) {
-        const groups = Array.from(groupMap.keys());
-        if (groups.length < 2) continue;
-        const minCount = Math.min(...groups.map((g) => groupMap.get(g)!.length));
-        for (let i = 0; i < minCount; i++) {
-          const bundle = groups.map((g) => groupMap.get(g)![i]);
-          bundle.forEach((c) => processedCardIds.add(c.id));
-          parallelBundles.push(bundle);
-        }
-      }
-    }
-  }
-
-  // --- Хос ба дан картууд ---
-  const doublePairs: { card1: CardToPlace; card2: CardToPlace }[] = [];
-  const singleCards: CardToPlace[] = [];
-  for (const card of cardsToPlace) {
-    if (processedCardIds.has(card.id)) continue;
-    if (card.doubleHalf === 'first' && card.partnerCardId) {
-      const partner = cardsToPlace.find((c) => c.id === card.partnerCardId && !processedCardIds.has(c.id));
-      if (partner) {
-        doublePairs.push({ card1: card, card2: partner });
-        processedCardIds.add(card.id);
-        processedCardIds.add(partner.id);
-        continue;
-      }
-    }
-    if (card.doubleHalf === 'second') continue; // хамтрагчтайгаа хамт байрлана
-    singleCards.push(card);
-  }
-  // Хамтрагчгүй үлдсэн 2-р хагасууд
-  for (const card of cardsToPlace) {
-    if (!processedCardIds.has(card.id) && card.doubleHalf === 'second' && !doublePairs.some((p) => p.card2.id === card.id)) {
-      singleCards.push({ ...card, isDouble: false, doubleHalf: undefined, partnerCardId: undefined });
-    }
-  }
-
-  // --- 1. Багцууд ---
-  onProgress?.(10, 'Зэрэгцээ дэд бүлгүүдийн хичээлүүдийг ижил цагт хуваарилж байна...');
-  for (const bundle of parallelBundles) {
-    const ok = placeBest(
-      bundle[0].shift,
-      0,
-      (period) => bundle.map((card) => ({ card, period })),
-      (_day, period) => Math.abs(period - 2.5) * 5
-    );
-    // Зэрэгцүүлэх боломжгүй бол (жишээ нь нэг багш хоёр бүлгийг заадаг) тус тусад нь байршуулна;
-    // зэрэгцээгүй нь verify-д дүрмийн зөрчил болж харагдана.
-    if (!ok) singleCards.push(...bundle);
-  }
-
-  // --- 2. Хос цагууд ---
-  onProgress?.(35, 'Хос цагийн хичээлүүдийг байршуулж байна...');
-  for (const { card1, card2 } of doublePairs) {
-    placeBest(
-      card1.shift,
-      1,
-      (period) => [
-        { card: card1, period },
-        { card: card2, period: period + 1 },
-      ],
-      (day, period) => period * 2 + abBonus(card1, day, period)
-    );
-  }
-
-  // --- 3. Дан цагууд ---
-  onProgress?.(65, 'Дан хичээлүүдийг хуваарилж байна...');
-  for (const card of singleCards) {
-    placeBest(
-      card.shift,
-      0,
-      (period) => [{ card, period }],
-      (day, period) => {
-        let penalty = 0;
-        if (
-          resultCards.some(
-            (rc) => rc.classId === card.classId && rc.subjectId === card.subjectId && rc.dayIndex === day
-          )
-        )
-          penalty += 100;
-        const sub = subjects.find((s) => s.id === card.subjectId);
-        if (sub?.shortName === 'Мат' && period <= 2) penalty -= 20;
-        penalty += abBonus(card, day, period);
-        return penalty;
-      }
-    );
-  }
-
-  onProgress?.(90, 'Зөрчил, хамаарлууд болон бүх дүрмүүдийг шалгаж байна...');
-  const conflicts = verifyTimetable(
-    resultCards,
+  onProgress?.(2, 'Картуудыг бэлтгэж, хүндийн зэргээр эрэмбэлж байна...');
+  const solver = new TimetableSolver(
+    settings,
     subjects,
     teachers,
     classes,
     classrooms,
-    settings,
     relationships,
-    contracts
+    contracts,
+    options.seed ?? 1
   );
+  solver.placeLocked(lockedCards.map((c) => enrichFromContract(c, contracts)));
+  solver.buildUnits(cardsToPlace);
+
+  const timeLimitMs = options.timeLimitMs ?? defaultTimeLimitMs(cardsToPlace.length);
+  const result = await solver.solve({ ...options, timeLimitMs }, onProgress);
+  const resultCards = result.scheduledCards;
+
+  onProgress?.(97, 'Зөрчил, хамаарлууд болон бүх дүрмүүдийг шалгаж байна...');
+  const conflicts = verifyTimetable(resultCards, subjects, teachers, classes, classrooms, settings, relationships, contracts);
 
   const hardConflicts = conflicts.filter((c) => c.severity === 'error').length;
   const softConflicts = conflicts.filter((c) => c.severity === 'warning').length;
@@ -705,7 +350,9 @@ export async function generateTimetable(
   const generationTimeMs = Date.now() - startTime;
   const totalCardsCount = cardsToPlace.length + lockedCards.length;
   const placedPercentage = totalCardsCount > 0 ? (resultCards.length / totalCardsCount) * 100 : 100;
-  const fitnessScore = Math.max(0, Math.round(placedPercentage - hardConflicts * 20 - softConflicts * 2));
+  // Үнэлгээ: байршсан хувь − хатуу зөрчил (20 тус бүр) − зөөлөн сануулгын нягтрал (картад ногдох, дээд тал нь 40)
+  const softDensity = totalCardsCount > 0 ? softConflicts / totalCardsCount : 0;
+  const fitnessScore = Math.max(0, Math.round(placedPercentage - hardConflicts * 20 - Math.min(40, softDensity * 50)));
 
   return {
     scheduledCards: resultCards,
@@ -722,11 +369,20 @@ export async function generateTimetable(
   };
 }
 
+/** Картын тооноос хамаарсан анхдагч хугацаа: жижиг сургууль ~5 сек, 3600 карт ~60 сек */
+export function defaultTimeLimitMs(cards: number): number {
+  return Math.round(Math.min(120000, Math.max(5000, cards * 16)));
+}
+
 /** Хуучин хадгалсан картад хамтран заах багш, хамтатгасан ангийг гэрээнээс нөхнө */
 function enrichFromContract(card: ScheduledCard, contracts?: LessonContract[]): ScheduledCard {
   if (!contracts) return card;
-  const ct = contracts.find((l) => l.id === card.contractId);
+  return enrichCard(card, contracts.find((l) => l.id === card.contractId));
+}
+
+function enrichCard(card: ScheduledCard, ct?: LessonContract): ScheduledCard {
   if (!ct) return card;
+  if ((card.coTeacherIds || !ct.coTeacherIds?.length) && (card.jointClassIds || !ct.jointClassIds?.length)) return card;
   const out = { ...card };
   if (!out.coTeacherIds && ct.coTeacherIds && ct.coTeacherIds.length > 0) out.coTeacherIds = [...ct.coTeacherIds];
   if (!out.jointClassIds && ct.jointClassIds && ct.jointClassIds.length > 0) out.jointClassIds = [...ct.jointClassIds];
@@ -752,7 +408,8 @@ export function verifyTimetable(
   lessons?: LessonContract[]
 ): ConflictIssue[] {
   const issues: ConflictIssue[] = [];
-  const cards = lessons ? rawCards.map((c) => enrichFromContract(c, lessons)) : rawCards;
+  const lessonById = lessons ? new Map(lessons.map((l) => [l.id, l])) : null;
+  const cards = lessonById ? rawCards.map((c) => enrichCard(c, lessonById.get(c.contractId))) : rawCards;
   const tm = buildTimeModel(settings);
   const ctx: ConstraintContext = { settings, teachers, classes, classrooms, subjects };
   const teacherName = (id: string) => teachers.find((t) => t.id === id)?.name || 'Багш';
@@ -765,9 +422,14 @@ export function verifyTimetable(
     if (!byDay.has(c.dayIndex)) byDay.set(c.dayIndex, []);
     byDay.get(c.dayIndex)!.push(c);
   }
-  for (const dayCards of byDay.values()) {
+  const startOf = (c: ScheduledCard) => tm.interval(c.shift, c.periodIndex).start;
+  const endOf = (c: ScheduledCard) => tm.interval(c.shift, c.periodIndex).end;
+  for (const dayCardsRaw of byDay.values()) {
+    // Эхлэх цагаар эрэмбэлж, зөвхөн цаг нь давхцаж болох хосыг шалгана (sweep line)
+    const dayCards = [...dayCardsRaw].sort((x, y) => startOf(x) - startOf(y));
     for (let i = 0; i < dayCards.length; i++) {
-      for (let j = i + 1; j < dayCards.length; j++) {
+      const aEnd = endOf(dayCards[i]);
+      for (let j = i + 1; j < dayCards.length && startOf(dayCards[j]) < aEnd; j++) {
         const a = dayCards[i];
         const b = dayCards[j];
         if (!weeksOverlap(a.weekCycle, b.weekCycle) || !timesOverlap(tm, a, b)) continue;
@@ -813,10 +475,16 @@ export function verifyTimetable(
     }
 
     // Танхимын багтаамж
+    const roomCards = new Map<string, ScheduledCard[]>();
+    for (const c of dayCards) {
+      if (!c.classroomId) continue;
+      if (!roomCards.has(c.classroomId)) roomCards.set(c.classroomId, []);
+      roomCards.get(c.classroomId)!.push(c);
+    }
     for (const a of dayCards) {
       if (!a.classroomId) continue;
       const room = classrooms.find((r) => r.id === a.classroomId);
-      const same = dayCards.filter(
+      const same = roomCards.get(a.classroomId)!.filter(
         (b) =>
           b.classroomId === a.classroomId && weeksOverlap(a.weekCycle, b.weekCycle) && (b === a || timesOverlap(tm, a, b))
       );
@@ -872,6 +540,40 @@ export function verifyTimetable(
     }
   }
 
+  // Багш, анги бүрийн өдрийн жагсаалт (дүрмийн шалгалтыг хурдан хийхэд)
+  const roomById = new Map(classrooms.map((r) => [r.id, r]));
+  const classById = new Map(classes.map((c) => [c.id, c]));
+  const teacherDayItems = new Map<string, DayItem[]>();
+  const classDayMap = new Map<string, ScheduledCard[]>();
+  for (const c of cards) {
+    const iv = tm.interval(c.shift, c.periodIndex);
+    const item: DayItem = { start: iv.start, end: iv.end, shift: c.shift, building: cardBuilding(c, roomById, classById) };
+    for (const t of teachersOf(c)) {
+      const key = `${t}|${c.dayIndex}`;
+      if (!teacherDayItems.has(key)) teacherDayItems.set(key, []);
+      teacherDayItems.get(key)!.push(item);
+    }
+    for (const cl of classesOf(c)) {
+      const key = `${cl}|${c.dayIndex}`;
+      if (!classDayMap.has(key)) classDayMap.set(key, []);
+      classDayMap.get(key)!.push(c);
+    }
+  }
+  const cardsByClass = new Map<string, ScheduledCard[]>();
+  for (const c of cards) {
+    if (!cardsByClass.has(c.classId)) cardsByClass.set(c.classId, []);
+    cardsByClass.get(c.classId)!.push(c);
+  }
+  const subgroupCardsByClassSubject = new Map<string, ScheduledCard[]>();
+  for (const c of cards) {
+    if (!c.subgroupName) continue;
+    const key = `${c.classId}|${c.subjectId}`;
+    if (!subgroupCardsByClassSubject.has(key)) subgroupCardsByClassSubject.set(key, []);
+    subgroupCardsByClassSubject.get(key)!.push(c);
+  }
+  const tProfile = (tId: string, d: number, buffer = 1) => dayProfile(teacherDayItems.get(`${tId}|${d}`) || [], buffer);
+  const classDayCards = (cId: string, d: number) => classDayMap.get(`${cId}|${d}`) || [];
+
   // 3. Байршаагүй цаг
   if (lessons) {
     const placedByContract = new Map<string, number>();
@@ -903,7 +605,7 @@ export function verifyTimetable(
 
     for (const cls of targetClasses) {
       for (let d = 0; d < settings.daysPerWeek; d++) {
-        const dayCards = cards.filter((c) => c.classId === cls.id && c.dayIndex === d);
+        const dayCards = classDayCards(cls.id, d).filter((c) => c.classId === cls.id);
         const presentSubjects = Array.from(
           new Set(
             dayCards.map((c) => c.subjectId).filter((sId) => r.subjectIds.includes(sId))
@@ -940,7 +642,7 @@ export function verifyTimetable(
 
     for (const cls of targetClasses) {
       for (let d = 0; d < settings.daysPerWeek; d++) {
-        const dayCards = cards.filter((c) => c.classId === cls.id && c.dayIndex === d);
+        const dayCards = classDayCards(cls.id, d).filter((c) => c.classId === cls.id);
         for (const c1 of dayCards) {
           if (!r.subjectIds.includes(c1.subjectId)) continue;
           const otherSubjects = r.subjectIds.filter((sId) => sId !== c1.subjectId);
@@ -989,9 +691,9 @@ export function verifyTimetable(
         settings.shifts.find((s) => s.shiftNumber === cls.shift) || settings.shifts[0];
       const periodsCount = shiftConf?.periodsCount || 6;
 
-      const matchCards = cards.filter(
+      const matchCards = (cardsByClass.get(cls.id) || []).filter(
         // Хос цагийн 2-р хагас 1-р хагасаараа шийдэгдэнэ
-        (c) => c.classId === cls.id && r.subjectIds.includes(c.subjectId) && c.isDoublePart !== 'second'
+        (c) => r.subjectIds.includes(c.subjectId) && c.isDoublePart !== 'second'
       );
 
       for (const card of matchCards) {
@@ -1047,9 +749,7 @@ export function verifyTimetable(
         : classes;
 
     for (const cls of targetClasses) {
-      const matchCards = cards.filter(
-        (c) => c.classId === cls.id && r.subjectIds.includes(c.subjectId)
-      );
+      const matchCards = (cardsByClass.get(cls.id) || []).filter((c) => r.subjectIds.includes(c.subjectId));
 
       for (const card of matchCards) {
         if (!r.allowedPeriods.includes(card.periodIndex)) {
@@ -1087,7 +787,7 @@ export function verifyTimetable(
         r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes;
       for (const cls of targetClasses) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const count = classDaySlots(cards, cls.id, d).length;
+          const count = classDaySlots(classDayCards(cls.id, d), cls.id, d).length;
           if (count > maxP || (count > 0 && count < minP)) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
@@ -1108,7 +808,7 @@ export function verifyTimetable(
         r.teacherIds && r.teacherIds.length > 0 ? teachers.filter((t) => r.teacherIds!.includes(t.id)) : teachers;
       for (const t of targetTeachers) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const count = teacherDaySlots(tm, cards, t.id, d).length;
+          const count = tProfile(t.id, d).count;
           if (count > maxP || (count > 0 && count < minP)) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
@@ -1138,7 +838,7 @@ export function verifyTimetable(
         r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes;
       for (const cls of targetClasses) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const run = maxRun(classDaySlots(cards, cls.id, d));
+          const run = maxRun(classDaySlots(classDayCards(cls.id, d), cls.id, d));
           if (run > maxConsec) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
@@ -1159,7 +859,7 @@ export function verifyTimetable(
         r.teacherIds && r.teacherIds.length > 0 ? teachers.filter((t) => r.teacherIds!.includes(t.id)) : teachers;
       for (const t of targetTeachers) {
         for (let d = 0; d < settings.daysPerWeek; d++) {
-          const run = maxRun(teacherDaySlots(tm, cards, t.id, d));
+          const run = tProfile(t.id, d).maxRun;
           if (run > maxConsec) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
@@ -1246,9 +946,7 @@ export function verifyTimetable(
           : subjects;
 
       for (const sub of targetSubjects) {
-        const classSubCards = cards.filter(
-          (c) => c.classId === cls.id && c.subjectId === sub.id && Boolean(c.subgroupName)
-        );
+        const classSubCards = subgroupCardsByClassSubject.get(`${cls.id}|${sub.id}`) || [];
 
         if (classSubCards.length > 1) {
           const distinctSubgroups = Array.from(new Set(classSubCards.map((c) => c.subgroupName!)));
@@ -1365,8 +1063,9 @@ export function verifyTimetable(
     for (const ent of targets) {
       let weeklyGaps = 0;
       for (let d = 0; d < settings.daysPerWeek; d++) {
-        const slots = isClasses ? classDaySlots(cards, ent.id, d) : teacherDaySlots(tm, cards, ent.id, d);
-        const dailyGaps = countGaps(slots);
+        const dailyGaps = isClasses
+          ? countGaps(classDaySlots(classDayCards(ent.id, d), ent.id, d))
+          : tProfile(ent.id, d).gaps;
         weeklyGaps += dailyGaps;
         if (dailyGaps > maxDayGaps) {
           const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
@@ -1412,7 +1111,9 @@ export function verifyTimetable(
 
     for (const ent of targets) {
       const distinctDays = new Set(
-        cards.filter((c) => (isClasses ? cardUsesClass(c, ent.id) : cardUsesTeacher(c, ent.id))).map((c) => c.dayIndex)
+        Array.from({ length: settings.daysPerWeek }, (_, d) => d).filter((d) =>
+          isClasses ? classDayCards(ent.id, d).length > 0 : (teacherDayItems.get(`${ent.id}|${d}`)?.length || 0) > 0
+        )
       );
       if (distinctDays.size > 0 && (distinctDays.size < minDays || distinctDays.size > maxDays)) {
         issues.push({
@@ -1430,65 +1131,87 @@ export function verifyTimetable(
     }
   }
 
-  // 14. Rule 12: 2 буюу 3 ээлжинд хичээл заадаг бол аль болох 2 ээлжийг дамжих цонх бага байлгах (minimize_shift_crossing_gap)
+  // 14. Rule 12: Ээлж дамжих цонх (minimize_shift_crossing_gap) — бодит цагаар
   for (const r of relationships) {
     if (!r.isActive || r.condition !== 'minimize_shift_crossing_gap') continue;
     const maxCrossGap = r.maxCrossShiftGap ?? 1;
-
     const targetTeachers =
-      r.teacherIds && r.teacherIds.length > 0
-        ? teachers.filter((t) => r.teacherIds!.includes(t.id))
-        : teachers;
-
+      r.teacherIds && r.teacherIds.length > 0 ? teachers.filter((t) => r.teacherIds!.includes(t.id)) : teachers;
     for (const t of targetTeachers) {
       for (let d = 0; d < settings.daysPerWeek; d++) {
-        const dayCards = cards.filter((c) => c.teacherId === t.id && c.dayIndex === d);
-        const shift1Cards = dayCards.filter((c) => c.shift === 1);
-        const shift2Cards = dayCards.filter((c) => c.shift === 2);
-        const shift3Cards = dayCards.filter((c) => c.shift === 3);
-
-        // Check Shift 1 -> Shift 2
-        if (shift1Cards.length > 0 && shift2Cards.length > 0) {
-          const maxP1 = Math.max(...shift1Cards.map((c) => c.periodIndex));
-          const minP2 = Math.min(...shift2Cards.map((c) => c.periodIndex));
-          const s1Config = settings.shifts.find((s) => s.shiftNumber === 1);
-          const s1Periods = s1Config?.periodsCount || 6;
-          const crossGap = (s1Periods - 1 - maxP1) + minP2;
-
-          if (crossGap > maxCrossGap) {
-            const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
-            issues.push({
-              id: `rule_shift_cross_t_${t.id}_${d}_1_2`,
-              type: 'shift_mismatch',
-              severity: r.importance === 'strict' ? 'error' : 'warning',
-              title: 'Ээлж хоорондын дамжих цонх хэт урт байна',
-              description: `${t.name} багш ${dayName} гарагт 1 ба 2-р ээлж хооронд ${crossGap} цагийн хэт урт завсартай байна. (Дээд хязгаар: ${maxCrossGap} цаг)`,
-              dayIndex: d,
-              entityType: 'teacher',
-              entityId: t.id,
-            });
-          }
+        const worst = Math.max(0, ...tProfile(t.id, d).crossShiftGaps);
+        if (worst > maxCrossGap) {
+          const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
+          issues.push({
+            id: `rule_shift_cross_t_${r.id}_${t.id}_${d}`,
+            type: 'shift_mismatch',
+            severity: r.importance === 'strict' ? 'error' : 'warning',
+            title: 'Ээлж хоорондын дамжих цонх хэт урт байна',
+            description: `${t.name} багш ${dayName} гарагт ээлж солигдохдоо ${worst} цагийн завсартай байна. (Дээд хязгаар: ${maxCrossGap} цаг)`,
+            dayIndex: d,
+            entityType: 'teacher',
+            entityId: t.id,
+          });
         }
+      }
+    }
+  }
 
-        // Check Shift 2 -> Shift 3
-        if (shift2Cards.length > 0 && shift3Cards.length > 0) {
-          const maxP2 = Math.max(...shift2Cards.map((c) => c.periodIndex));
-          const minP3 = Math.min(...shift3Cards.map((c) => c.periodIndex));
-          const s2Config = settings.shifts.find((s) => s.shiftNumber === 2);
-          const s2Periods = s2Config?.periodsCount || 6;
-          const crossGap = (s2Periods - 1 - maxP2) + minP3;
+  // 15. Байр солих завсар (building_transfer_buffer)
+  for (const r of relationships) {
+    if (!r.isActive || r.condition !== 'building_transfer_buffer') continue;
+    const buffer = r.value ?? 1;
+    const targetTeachers =
+      r.teacherIds && r.teacherIds.length > 0 ? teachers.filter((t) => r.teacherIds!.includes(t.id)) : teachers;
+    for (const t of targetTeachers) {
+      for (let d = 0; d < settings.daysPerWeek; d++) {
+        const hops = tProfile(t.id, d, buffer).buildingHops;
+        if (hops > 0) {
+          const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
+          issues.push({
+            id: `rule_building_${r.id}_${t.id}_${d}`,
+            type: 'building_clash',
+            severity: r.importance === 'strict' ? 'error' : 'warning',
+            title: 'Байр солихдоо завсаргүй',
+            description: `${t.name} багш ${dayName} гарагт ${hops} удаа өөр байр руу завсаргүй шилжиж байна. (Шаардлага: ${buffer} цагийн завсар)`,
+            dayIndex: d,
+            entityType: 'teacher',
+            entityId: t.id,
+          });
+        }
+      }
+    }
+  }
 
-          if (crossGap > maxCrossGap) {
+  // 16. 7 хоногт жигд тархах (ideal_distribution): нэг хичээл нэг өдөр 2+ удаа (хос цаг, дэд бүлгийн зэрэгцээ, А/Б-г нэг гэж)
+  for (const r of relationships) {
+    if (!r.isActive || r.condition !== 'ideal_distribution') continue;
+    const targetClasses = r.classIds && r.classIds.length > 0 ? classes.filter((c) => r.classIds.includes(c.id)) : classes;
+    for (const cls of targetClasses) {
+      for (let d = 0; d < settings.daysPerWeek; d++) {
+        const dc = classDayCards(cls.id, d);
+        const bySubject = new Map<string, { a: Set<number>; b: Set<number> }>();
+        for (const c of dc) {
+          if (r.subjectIds?.length && !r.subjectIds.includes(c.subjectId)) continue;
+          if (c.isDoublePart === 'second') continue;
+          if (!bySubject.has(c.subjectId)) bySubject.set(c.subjectId, { a: new Set(), b: new Set() });
+          const e = bySubject.get(c.subjectId)!;
+          if (c.weekCycle !== 'week_b') e.a.add(c.periodIndex);
+          if (c.weekCycle !== 'week_a') e.b.add(c.periodIndex);
+        }
+        for (const [sid, e] of bySubject) {
+          const n = Math.max(e.a.size, e.b.size);
+          if (n > 1) {
             const dayName = settings.dayNames[d] || `${d + 1}-р өдөр`;
             issues.push({
-              id: `rule_shift_cross_t_${t.id}_${d}_2_3`,
-              type: 'shift_mismatch',
+              id: `rule_ideal_${r.id}_${cls.id}_${d}_${sid}`,
+              type: 'custom_constraint',
               severity: r.importance === 'strict' ? 'error' : 'warning',
-              title: 'Ээлж хоорондын дамжих цонх хэт урт байна',
-              description: `${t.name} багш ${dayName} гарагт 2 ба 3-р ээлж хооронд ${crossGap} цагийн хэт урт завсартай байна. (Дээд хязгаар: ${maxCrossGap} цаг)`,
+              title: 'Хичээл 7 хоногт жигд тархаагүй',
+              description: `${cls.name} ангид ${dayName} гарагт ${subjects.find((s) => s.id === sid)?.name || 'хичээл'} ${n} удаа орж байна.`,
               dayIndex: d,
-              entityType: 'teacher',
-              entityId: t.id,
+              entityType: 'class',
+              entityId: cls.id,
             });
           }
         }
